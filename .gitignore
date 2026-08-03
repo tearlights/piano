@@ -1,0 +1,22 @@
+# Android / Gradle
+.gradle/
+build/
+**/build/
+local.properties
+*.iml
+.idea/
+
+# Signing and secrets
+*.jks
+*.keystore
+keystore.properties
+.env
+
+# User content and generated exports
+user-content/
+exports/
+*.gpiano
+
+# OS files
+.DS_Store
+Thumbs.db

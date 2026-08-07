@@ -1,20 +1,20 @@
 # Gpiano
 
-本地优先的 Android 钢琴谱阅读与管理应用。第一阶段只解决“导入、整理、舒适看谱、节拍器、可迁移备份”，不实现云端、AI 识谱或账号体系。
+本地优先的 Android 智能钢琴学习伙伴。Gpiano AI 以 OMR、MusicXML、AI 练习指导、可编辑练习版本和 MIDI 跟弹反馈，将用户自有或已获授权的静态琴谱转化为可听、可看、可练、可调整、可校准的个人练习材料。
 
 ## 快速开始
 
-1. 阅读 [项目宪章](PROJECT_CHARTER.md) 和 [当前上下文](.codex/project-context.md)。
-2. 执行 `bash scripts/bootstrap.sh` 检查开发环境。
-3. Android 应用工程将在完成 UI/交互设计确认后创建；当前仓库刻意不包含业务代码。
+1. 阅读 [权威项目简报](PROJECT_BRIEF.md)、[比赛基础愿景](比赛资料/基础信息/Gpiano-AI主理人出道计划报名帖.md) 和 [第一周产品战略](比赛资料/第一周/output/产品关键信息.md)。
+2. 阅读 [项目宪章](PROJECT_CHARTER.md)、[产品需求](docs/product/requirements.md) 与相关 ADR。
+3. 再阅读 [项目上下文](docs/context-sync/project-context.md) 与 [当前状态](docs/context-sync/current-status.md)。
 
 ## 项目资料
 
 - [产品需求](docs/product/requirements.md)
-- [阅读体验规范](docs/product/reader-ux.md)
-- [本地数据与备份规范](docs/architecture/local-data-and-backup.md)
+- [比赛资料](比赛资料/)
+- [练习工作区体验规范](docs/product/reader-ux.md)
+- [本地数据、结构化乐谱与备份规范](docs/architecture/local-data-and-backup.md)
 - [架构决策](docs/decisions/)
-- [AI 交接记录](.codex/handoffs/)
 
 ## 可移植性
 

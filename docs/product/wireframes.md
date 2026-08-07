@@ -1,4 +1,6 @@
-# 低保真线框（v0）
+# 低保真线框（历史 v0：本地阅读器阶段）
+
+> 本文保留旧阶段的视觉与阅读交互参考，不作为比赛 MVP 的现行信息架构。现行方向见 `docs/product/information-architecture.md`、`docs/product/reader-ux.md` 和 `PROJECT_BRIEF.md`；当前应补充“结构化谱面选区、播放、AI 建议与 MIDI 跟弹”的练习工作区线框。
 
 以下线框描述信息优先级，不代表最终视觉风格。
 

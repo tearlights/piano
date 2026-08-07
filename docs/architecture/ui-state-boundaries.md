@@ -1,36 +1,40 @@
-# UI 状态边界（v0）
+# UI 状态边界（比赛 MVP）
 
 ## 原则
 
-界面状态与持久化数据分离。页面旋转、短暂后台切换和进程重建不能导致用户失去正在看的谱页或导入进度。
+界面状态与持久化数据分离。页面旋转、短暂后台切换和进程重建不能导致用户失去当前选段、识谱校正、播放进度、练习版本、导入任务或 MIDI 练习状态。
 
 ## 状态归属
 
 | 状态 | 保存位置 | 示例 |
 | --- | --- | --- |
-| 曲谱、文件夹、书签、阅读位置 | Room 数据库 | `Score`、`ReadingState` |
-| 用户全局偏好 | DataStore | 默认阅读模式、主题、翻页热区 |
-| 仅本次页面交互 | ViewModel/SavedStateHandle | 是否展示工具栏、当前抽屉 |
-| 文件导入与缩略图任务 | WorkManager + 数据库状态 | `Pending`、`Running`、`Failed`、`Ready` |
+| 曲谱、结构化乐谱、版本、书签、阅读位置、反馈摘要 | Room 数据库 | `Score`、`ScoreStructure`、`PracticeVersion`、`PerformanceFeedback` |
+| 用户全局偏好 | DataStore | 默认阅读模式、主题、播放偏好、MIDI 偏好与授权状态 |
+| 仅本次页面交互 | ViewModel/SavedStateHandle | 工具栏、当前选段、练习面板、设备连接面板 |
+| 导入、OMR 与缩略图任务 | WorkManager + 数据库状态 | `Pending`、`Running`、`Failed`、`Ready`、`NeedsCorrection` |
+| MIDI 演奏事件 | App 私有文件 + 数据库摘要 | 原始事件流、会话、匹配结果 |
 | PDF 页图缓存 | App 缓存目录 | 已渲染页面位图 |
 
-## 阅读器状态机
+## 练习工作区状态机
 
 ```text
-Loading → Ready ↔ ControlsVisible
-   │         │
-   │         ├→ MetronomeExpanded
-   │         └→ Error (可重新加载)
+Loading → OriginalReady → StructureReady ↔ PracticePanelOpen
+   │            │                ├→ Playing
+   │            │                ├→ EditingVersion
+   │            │                ├→ MidiConnecting → MidiReady → Matching
+   │            │                └→ Error (可恢复)
    └→ Error
 ```
 
-每次页码、缩放或阅读模式的稳定变更应采用防抖保存，避免频繁写数据库；离开阅读页时必须立即落盘。
+页码、缩放、选段、速度、循环、练习版本和稳定的校正结果应防抖保存；离开练习工作区时必须立即落盘。MIDI 事件流应追加写入私有文件，避免高频事件直接阻塞数据库。
 
 ## 导入状态机
 
 ```text
-Selected → Validating → Copying → Indexing → Ready
-                    └→ Failed (保留错误原因和重试入口)
+Selected → Validating → Copying → Indexing → OriginalReady → OMRRunning
+                                                     ├→ StructureReady
+                                                     ├→ NeedsCorrection
+                                                     └→ Failed (保留错误原因和重试入口)
 ```
 
-只有 `Ready` 的曲谱才能进入常规列表。任何失败路径都不得删除已存在的曲谱或其元数据。
+`OriginalReady` 的曲谱可进入原谱阅读；只有 `StructureReady` 的内容可进入播放、改编和 MIDI 匹配流程。任何失败路径都不得删除已存在的曲谱或其元数据。

@@ -5,6 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.LibraryMusic
+import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -33,11 +34,13 @@ import com.gpiano.app.ui.screens.RealFoldersScreen
 import com.gpiano.app.ui.screens.SettingsScreen
 import com.gpiano.app.ui.screens.BackupSettingsScreen
 import com.gpiano.app.ui.screens.RestoreSettingsScreen
+import com.gpiano.app.ui.screens.StructuredScoreWorkspaceScreen
 
 private enum class Destination(val label: String, val icon: ImageVector) {
     Library("曲谱库", Icons.Outlined.LibraryMusic),
     Favorites("收藏", Icons.Outlined.FavoriteBorder),
     Folders("文件夹", Icons.Outlined.FolderOpen),
+    Workspace("练习工作区", Icons.Outlined.MusicNote),
     Settings("设置", Icons.Outlined.Settings),
 }
 
@@ -91,6 +94,7 @@ fun GpianoApp() {
                 onNameChange = libraryViewModel::clearFolderError,
                 onCreate = libraryViewModel::createFolder,
             )
+            Destination.Workspace -> StructuredScoreWorkspaceScreen(contentPadding = padding)
             Destination.Settings -> RestoreSettingsScreen(contentPadding = padding, scores = scores, onRestore = libraryViewModel::restoreBackup)
         }
     }

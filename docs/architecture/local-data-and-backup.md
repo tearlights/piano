@@ -2,14 +2,16 @@
 
 更新日期：2026-08-12
 
-状态：目标数据与备份设计；尚未全部实现。
+状态：Room v8 与 `.gpiano` v3 已落地；后续练习/MIDI 实体仍是目标设计。
 
 ## 当前实现差距
 
-- Room 当前版本为 6，只包含 `Score`、`ScorePage`、`Bookmark` 和 `Folder`。
-- `.gpiano` 当前格式版本为 1，只导出/恢复曲谱基础元数据、收藏状态和原始文件。
-- 文件夹、书签、页面顺序、阅读状态以及下文规划的结构化乐谱、练习版本和演奏记录尚未进入备份。
-- 在实现下文新增实体前，必须补充迁移、旧备份导入和事务式恢复方案。
+- Room 当前版本为 8，已包含 `Score`、`ScorePage`、`Bookmark`、`Folder`、`ScoreStructure`、`ScoreRevision` 和 `RecognitionJob`。
+- `.gpiano` 当前格式版本为 3，已导出/恢复现有曲谱、原始文件和图片页、收藏、文件夹、书签、页面顺序、结构化修订及脱敏识别任务；v1/v2 继续可导入。
+- v3 以清单记录文件大小和 SHA-256，恢复采用临时目录校验、受控路径、文件补偿与单个 Room 事务；token 和远端任务 ID不导出。
+- 阅读状态、练习版本、选段和演奏记录尚未形成实体，因此尚未进入备份；新增这些实体时必须同步升级数据库和备份格式。
+
+落地规则见 `docs/decisions/ADR-0011-structured-score-persistence-and-backup-v2.md` 与 `docs/decisions/ADR-0013-audiveris-omr-companion-and-job-model.md`：MusicXML 以私有目录标准文件保存，Room 管理版本与识别任务关系；`.gpiano` v3 覆盖既有库数据、结构化修订与脱敏任务，同时继续导入 v1/v2。
 
 ## 目标存储边界
 
@@ -23,6 +25,7 @@
 - `Bookmark`：曲谱 UUID、页码、名称、创建时间。
 - `MetronomePreset`：名称、BPM、拍号、音量。
 - `ScoreStructure`：原谱 UUID、结构化格式版本、MusicXML/MIDI 相对路径、OMR 置信度、校正状态、位置映射版本。
+- `RecognitionJob`：输入页与 SHA-256、provider、可恢复状态、诊断、结果结构关系；服务令牌不进入数据库或备份。
 - `PracticeVersion`：稳定 UUID、原谱 UUID、派生来源、改编参数、相对文件路径、创建/更新时间、撤销关系。
 - `PracticeSegment`：结构化乐谱 UUID、小节范围、左右手、速度、循环和练习目标。
 - `PerformanceSession`：练习版本/选段 UUID、MIDI 设备摘要、速度、开始/结束时间和本地演奏事件路径。

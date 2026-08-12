@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.gpiano.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.gpiano.app"
@@ -30,7 +30,12 @@ android {
 
     sourceSets {
         getByName("debug").assets.srcDir("../test-res")
+        getByName("test").resources.srcDir("../test-res")
     }
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
@@ -47,6 +52,8 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     implementation(libs.alphatab)
+    implementation(libs.androidx.work.runtime)
     ksp(libs.androidx.room.compiler)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    testImplementation(libs.junit)
 }

@@ -20,3 +20,4 @@ exports/
 # OS files
 .DS_Store
 Thumbs.db
+omr-service/var/

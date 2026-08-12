@@ -18,11 +18,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.gpiano.app.viewmodel.LibraryViewModel
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import com.gpiano.app.scoreworkspace.WorkspaceSelectionStore
 import com.gpiano.app.ui.screens.FavoritesScreen
 import com.gpiano.app.ui.screens.FoldersScreen
 import com.gpiano.app.ui.screens.ImportedLibraryScreen
@@ -46,6 +47,8 @@ private enum class Destination(val label: String, val icon: ImageVector) {
 
 @Composable
 fun GpianoApp() {
+    val context = LocalContext.current.applicationContext
+    val workspaceSelectionStore = remember { WorkspaceSelectionStore(context) }
     var destination by remember { mutableStateOf(Destination.Library) }
     var readerOpen by remember { mutableStateOf(false) }
     var openedScore by remember { mutableStateOf<Score?>(null) }
@@ -54,6 +57,11 @@ fun GpianoApp() {
     val favorites by libraryViewModel.favorites.collectAsState()
     val folders by libraryViewModel.folders.collectAsState()
     val folderError by libraryViewModel.folderError.collectAsState()
+    val backupState by libraryViewModel.backupState.collectAsState()
+    val recognitionJobs by libraryViewModel.recognitionJobs.collectAsState()
+    val omrSettingsState by libraryViewModel.omrSettingsState.collectAsState()
+    val aiSettingsState by libraryViewModel.aiSettingsState.collectAsState()
+    var workspaceStructureId by remember { mutableStateOf(workspaceSelectionStore.load()) }
 
     if (readerOpen) {
         BackHandler { readerOpen = false }
@@ -85,6 +93,15 @@ fun GpianoApp() {
                 onImportAll = libraryViewModel::importAll,
                 onRename = libraryViewModel::rename,
                 onOpenReader = { score -> libraryViewModel.open(score); openedScore = score; readerOpen = true },
+                recognitionJobs = recognitionJobs,
+                onRecognize = libraryViewModel::recognize,
+                onRetryRecognition = libraryViewModel::retryRecognition,
+                onCancelRecognition = libraryViewModel::cancelRecognition,
+                onOpenWorkspace = { structureId ->
+                    workspaceStructureId = structureId
+                    workspaceSelectionStore.save(structureId)
+                    destination = Destination.Workspace
+                },
             )
             Destination.Favorites -> RealFavoritesScreen(contentPadding = padding, scores = favorites, onOpenReader = { score -> libraryViewModel.open(score); openedScore = score; readerOpen = true })
             Destination.Folders -> RealFoldersScreen(
@@ -94,8 +111,17 @@ fun GpianoApp() {
                 onNameChange = libraryViewModel::clearFolderError,
                 onCreate = libraryViewModel::createFolder,
             )
-            Destination.Workspace -> StructuredScoreWorkspaceScreen(contentPadding = padding)
-            Destination.Settings -> RestoreSettingsScreen(contentPadding = padding, scores = scores, onRestore = libraryViewModel::restoreBackup)
+            Destination.Workspace -> StructuredScoreWorkspaceScreen(contentPadding = padding, structureId = workspaceStructureId)
+            Destination.Settings -> RestoreSettingsScreen(
+                contentPadding = padding,
+                backupState = backupState,
+                onExport = libraryViewModel::exportBackup,
+                onRestore = libraryViewModel::restoreBackup,
+                omrState = omrSettingsState,
+                onSaveOmr = libraryViewModel::saveAndTestOmrSettings,
+                aiState = aiSettingsState,
+                onSaveAi = libraryViewModel::saveAndTestAiSettings,
+            )
         }
     }
 }

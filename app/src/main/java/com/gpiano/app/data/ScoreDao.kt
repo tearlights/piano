@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -11,8 +12,17 @@ interface ScoreDao {
     @Query("SELECT * FROM scores ORDER BY COALESCE(lastOpenedAt, importedAt) DESC")
     fun observeAll(): Flow<List<Score>>
 
+    @Query("SELECT * FROM scores ORDER BY id")
+    suspend fun getAll(): List<Score>
+
+    @Query("SELECT * FROM scores WHERE id = :id LIMIT 1")
+    suspend fun find(id: String): Score?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(score: Score)
+
+    @Upsert
+    suspend fun restoreAll(scores: List<Score>)
 
     @Query("UPDATE scores SET lastOpenedAt = :openedAt WHERE id = :id")
     suspend fun markOpened(id: String, openedAt: Long)
@@ -26,6 +36,8 @@ interface ScoreDao {
     suspend fun toggleFavorite(id: String)
     @Query("UPDATE scores SET folderId = :folderId WHERE id = :id")
     suspend fun setFolder(id: String, folderId: String?)
+    @Query("UPDATE scores SET folderId = NULL WHERE folderId = :folderId")
+    suspend fun clearFolder(folderId: String)
     @Query("DELETE FROM scores WHERE id = :id")
     suspend fun delete(id: String)
 }

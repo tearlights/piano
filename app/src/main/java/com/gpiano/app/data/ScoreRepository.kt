@@ -3,8 +3,11 @@ package com.gpiano.app.data
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
-import androidx.room.Room
+import androidx.room.withTransaction
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -12,14 +15,54 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 class ScoreRepository(private val context: Context) {
-    private val database = Room.databaseBuilder(context, GpianoDatabase::class.java, "gpiano.db").addMigrations(GpianoDatabaseMigration.V1_TO_V2, GpianoDatabaseMigration.V2_TO_V3, GpianoDatabaseMigration.V3_TO_V4, GpianoDatabaseMigration.V4_TO_V5, GpianoDatabaseMigration.V5_TO_V6).build()
+    private val database = GpianoDatabaseProvider.get(context)
     private val scoreDirectory = File(context.filesDir, "scores")
 
     fun observeScores(): Flow<List<Score>> = database.scoreDao().observeAll()
 
+    suspend fun exportBackup(uri: Uri) = withContext(Dispatchers.IO) {
+        val snapshot = database.withTransaction {
+            GpianoBackupSnapshot(
+                scores = database.scoreDao().getAll(),
+                pages = database.scorePageDao().getAll(),
+                bookmarks = database.bookmarkDao().getAll(),
+                folders = database.folderDao().getAll(),
+                structures = database.scoreStructureDao().allStructures(),
+                revisions = database.scoreStructureDao().allRevisions(),
+                recognitionJobs = database.recognitionJobDao().getAll(),
+                practiceVersions = database.practiceVersionDao().getAll(),
+                practiceAttempts = database.practiceAttemptDao().getAll(),
+                midiPerformanceEvents = database.practiceAttemptDao().getAllEvents(),
+            )
+        }
+        GpianoBackupManager(context).export(snapshot, uri)
+    }
+
     suspend fun restoreBackup(uri: Uri) = withContext(Dispatchers.IO) {
-        val restored = GpianoBackupManager(context).restore(uri)
-        restored.forEach { database.scoreDao().upsert(it) }
+        GpianoBackupManager(context).stage(uri).use { staged ->
+            val files = installStagedFiles(staged)
+            try {
+                val snapshot = staged.snapshot
+                database.withTransaction {
+                    if (snapshot.folders.isNotEmpty()) database.folderDao().restoreAll(snapshot.folders)
+                    if (snapshot.scores.isNotEmpty()) database.scoreDao().restoreAll(snapshot.scores)
+                    if (snapshot.pages.isNotEmpty()) database.scorePageDao().restoreAll(snapshot.pages)
+                    if (snapshot.bookmarks.isNotEmpty()) database.bookmarkDao().restoreAll(snapshot.bookmarks)
+                    if (snapshot.structures.isNotEmpty()) database.scoreStructureDao().restoreStructures(snapshot.structures)
+                    if (snapshot.revisions.isNotEmpty()) database.scoreStructureDao().restoreRevisions(snapshot.revisions)
+                    if (snapshot.recognitionJobs.isNotEmpty()) database.recognitionJobDao().restoreAll(snapshot.recognitionJobs)
+                    if (snapshot.practiceVersions.isNotEmpty()) database.practiceVersionDao().restoreAll(snapshot.practiceVersions)
+                    if (snapshot.practiceAttempts.isNotEmpty()) database.practiceAttemptDao().restoreAttempts(snapshot.practiceAttempts)
+                    if (snapshot.midiPerformanceEvents.isNotEmpty()) {
+                        database.practiceAttemptDao().restoreEvents(snapshot.midiPerformanceEvents)
+                    }
+                }
+                files.complete()
+            } catch (error: Throwable) {
+                files.rollback()
+                throw error
+            }
+        }
     }
 
 
@@ -88,7 +131,10 @@ class ScoreRepository(private val context: Context) {
         database.folderDao().insert(Folder(java.util.UUID.randomUUID().toString(), name.trim(), System.currentTimeMillis()))
     }
 
-    suspend fun deleteFolder(id: String) = database.folderDao().delete(id)
+    suspend fun deleteFolder(id: String) = database.withTransaction {
+        database.scoreDao().clearFolder(id)
+        database.folderDao().delete(id)
+    }
 
     fun observeBookmarks(scoreId: String): Flow<List<Bookmark>> = database.bookmarkDao().observe(scoreId)
 
@@ -113,9 +159,12 @@ class ScoreRepository(private val context: Context) {
 
     suspend fun delete(score: Score) = withContext(Dispatchers.IO) {
         val pages = database.scorePageDao().observe(score.id).first()
+        database.withTransaction {
+            database.bookmarkDao().deleteForScore(score.id)
+            database.scorePageDao().deleteForScore(score.id)
+            database.scoreDao().delete(score.id)
+        }
         pages.forEach { page -> page.relativePath?.let { File(context.filesDir, it).delete() } }
-        database.scorePageDao().deleteForScore(score.id)
-        database.scoreDao().delete(score.id)
         if (score.relativePath.isNotBlank()) File(context.filesDir, score.relativePath).delete()
         File(context.filesDir, "scores/${score.id}").delete()
     }
@@ -129,5 +178,86 @@ class ScoreRepository(private val context: Context) {
         "image/png" -> "png"
         "image/webp" -> "webp"
         else -> "jpg"
+    }
+
+    private fun installStagedFiles(staged: StagedGpianoBackup): BackupFileCommit {
+        val rollbackRoot = File(context.cacheDir, "backup-rollback/${UUID.randomUUID()}")
+        check(rollbackRoot.mkdirs()) { "无法创建恢复回滚目录" }
+        val changes = mutableListOf<BackupFileChange>()
+        try {
+            staged.dataPaths.forEach { relativePath ->
+                val source = resolveInside(staged.directory, relativePath)
+                val target = resolveInside(context.filesDir, relativePath)
+                target.parentFile?.mkdirs()
+                val rollback = if (target.exists()) {
+                    resolveInside(rollbackRoot, relativePath).also { backup ->
+                        backup.parentFile?.mkdirs()
+                        target.inputStream().buffered().use { input ->
+                            FileOutputStream(backup).buffered().use { input.copyTo(it) }
+                        }
+                    }
+                } else {
+                    null
+                }
+                changes += BackupFileChange(target, rollback)
+                val temporary = File(target.parentFile, ".${target.name}.${UUID.randomUUID()}.restore")
+                try {
+                    FileOutputStream(temporary).use { output ->
+                        source.inputStream().buffered().use { it.copyTo(output) }
+                        output.fd.sync()
+                    }
+                    runCatching {
+                        Files.move(
+                            temporary.toPath(),
+                            target.toPath(),
+                            StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING,
+                        )
+                    }.getOrElse {
+                        Files.move(temporary.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    }
+                } finally {
+                    temporary.delete()
+                }
+            }
+            return BackupFileCommit(changes, rollbackRoot)
+        } catch (error: Throwable) {
+            BackupFileCommit(changes, rollbackRoot).rollback()
+            throw error
+        }
+    }
+
+    private fun resolveInside(root: File, relativePath: String): File {
+        require(relativePath.isNotBlank() && !File(relativePath).isAbsolute) { "恢复文件路径无效" }
+        val canonicalRoot = root.canonicalFile
+        val resolved = File(canonicalRoot, relativePath).canonicalFile
+        require(resolved.path.startsWith(canonicalRoot.path + File.separator)) { "恢复文件路径越界" }
+        return resolved
+    }
+}
+
+private data class BackupFileChange(val target: File, val rollback: File?)
+
+private class BackupFileCommit(
+    private val changes: List<BackupFileChange>,
+    private val rollbackRoot: File,
+) {
+    fun complete() {
+        rollbackRoot.deleteRecursively()
+    }
+
+    fun rollback() {
+        changes.asReversed().forEach { change ->
+            runCatching {
+                val backup = change.rollback
+                if (backup == null) {
+                    change.target.delete()
+                } else if (backup.exists()) {
+                    change.target.parentFile?.mkdirs()
+                    Files.copy(backup.toPath(), change.target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                }
+            }
+        }
+        rollbackRoot.deleteRecursively()
     }
 }

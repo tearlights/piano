@@ -321,7 +321,7 @@ class StructuredScoreRepository(
         "structures/$structureId/revisions/$revisionId.musicxml"
 }
 
-private fun CorrectionOperation.toAuditJson(): String = when (this) {
+internal fun CorrectionOperation.toAuditJson(): String = when (this) {
     is CorrectionOperation.ChangePitch -> JSONObject()
         .put("type", "changePitch")
         .put("eventId", eventId)

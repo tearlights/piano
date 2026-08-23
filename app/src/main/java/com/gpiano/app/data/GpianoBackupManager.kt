@@ -30,6 +30,7 @@ data class GpianoBackupSnapshot(
     val practiceVersions: List<PracticeVersion>,
     val practiceAttempts: List<PracticeAttempt>,
     val midiPerformanceEvents: List<MidiPerformanceEvent>,
+    val practiceVersionRevisions: List<PracticeVersionRevision> = emptyList(),
 )
 
 data class StagedGpianoBackup(
@@ -133,7 +134,8 @@ class GpianoBackupManager(private val context: Context) {
                 2 -> parseVersion2(library)
                 3 -> parseVersion3(library)
                 4 -> parseVersion4(library)
-                else -> parseVersion5(library)
+                5 -> parseVersion5(library)
+                else -> parseVersion6(library)
             }
             if (version >= 2) validateManifest(staging, version)
             validateSnapshot(snapshot, staging)
@@ -187,6 +189,9 @@ class GpianoBackupManager(private val context: Context) {
         requireUnique(snapshot.recognitionJobs.map(RecognitionJob::id), "识别任务")
         requireUnique(snapshot.practiceVersions.map(PracticeVersion::id), "练习版本")
         requireUnique(snapshot.practiceVersions.map(PracticeVersion::musicXmlRelativePath), "练习版本文件")
+        requireUnique(snapshot.practiceVersionRevisions.map(PracticeVersionRevision::id), "练习版本修订")
+        requireUnique(snapshot.practiceVersionRevisions.map { "${it.practiceVersionId}:${it.revisionNumber}" }, "练习版本修订号")
+        requireUnique(snapshot.practiceVersionRevisions.map(PracticeVersionRevision::musicXmlRelativePath), "练习版本修订文件")
         requireUnique(snapshot.practiceAttempts.map(PracticeAttempt::id), "跟弹记录")
         requireUnique(snapshot.midiPerformanceEvents.map { "${it.attemptId}:${it.sequence}" }, "MIDI 按键")
 
@@ -226,6 +231,8 @@ class GpianoBackupManager(private val context: Context) {
                 require(job.resultStructureId != null) { "已完成识别任务缺少结构化结果" }
             }
         }
+        val practiceVersionsById = snapshot.practiceVersions.associateBy(PracticeVersion::id)
+        val practiceVersionRevisionsById = snapshot.practiceVersionRevisions.associateBy(PracticeVersionRevision::id)
         snapshot.practiceVersions.forEach { version ->
             require(version.structureId in structuresById) { "练习版本引用了不存在的结构化乐谱" }
             require(revisionsById[version.baseRevisionId]?.structureId == version.structureId) {
@@ -238,8 +245,22 @@ class GpianoBackupManager(private val context: Context) {
                 "练习版本计划范围不一致"
             }
             PracticeVersionCompiler.differencesFromJson(version.differenceJson)
+            version.currentRevisionId?.let { revisionId ->
+                require(practiceVersionRevisionsById[revisionId]?.practiceVersionId == version.id) {
+                    "练习版本的当前修订无效"
+                }
+            }
         }
-        val practiceVersionsById = snapshot.practiceVersions.associateBy(PracticeVersion::id)
+        snapshot.practiceVersionRevisions.forEach { revision ->
+            require(revision.practiceVersionId in practiceVersionsById) { "练习版本修订引用了不存在的练习版本" }
+            require(revision.revisionNumber >= 1) { "练习版本修订号无效" }
+            revision.parentRevisionId?.let { parentId ->
+                val parent = practiceVersionRevisionsById[parentId]
+                require(parent?.practiceVersionId == revision.practiceVersionId) { "练习版本修订的父版本无效" }
+                require(parent.revisionNumber < revision.revisionNumber) { "练习版本修订顺序无效" }
+            }
+            revision.operationJson?.let(::JSONObject)
+        }
         val attemptsById = snapshot.practiceAttempts.associateBy(PracticeAttempt::id)
         snapshot.practiceAttempts.forEach { attempt ->
             require(attempt.structureId in structuresById) { "跟弹记录引用了不存在的结构化乐谱" }
@@ -293,6 +314,14 @@ class GpianoBackupManager(private val context: Context) {
             val xml = resolveInside(fileRoot, revision.musicXmlRelativePath).readText(Charsets.UTF_8)
             ScoreIrValidator.requireValid(MusicXmlScoreParser.parse(xml))
         }
+        snapshot.practiceVersions.forEach { version ->
+            val xml = resolveInside(fileRoot, version.musicXmlRelativePath).readText(Charsets.UTF_8)
+            ScoreIrValidator.requireValid(MusicXmlScoreParser.parse(xml))
+        }
+        snapshot.practiceVersionRevisions.forEach { revision ->
+            val xml = resolveInside(fileRoot, revision.musicXmlRelativePath).readText(Charsets.UTF_8)
+            ScoreIrValidator.requireValid(MusicXmlScoreParser.parse(xml))
+        }
     }
 
     private fun referencedPaths(snapshot: GpianoBackupSnapshot): Set<String> = linkedSetOf<String>().apply {
@@ -301,6 +330,7 @@ class GpianoBackupManager(private val context: Context) {
         snapshot.structures.mapNotNull(ScoreStructure::sourceMapRelativePath).forEach { add(safeDataPath(it)) }
         snapshot.revisions.map(ScoreRevision::musicXmlRelativePath).forEach { add(safeDataPath(it)) }
         snapshot.practiceVersions.map(PracticeVersion::musicXmlRelativePath).forEach { add(safeDataPath(it)) }
+        snapshot.practiceVersionRevisions.map(PracticeVersionRevision::musicXmlRelativePath).forEach { add(safeDataPath(it)) }
     }
 
     private fun parseVersion1(library: JSONObject): GpianoBackupSnapshot {
@@ -429,6 +459,7 @@ class GpianoBackupManager(private val context: Context) {
                     fromMeasure = item.getInt("fromMeasure"),
                     toMeasure = item.getInt("toMeasure"),
                     musicXmlRelativePath = item.getString("musicXmlRelativePath"),
+                    currentRevisionId = null,
                     planJson = item.getString("planJson"),
                     differenceJson = item.getString("differenceJson"),
                     createdAt = item.getLong("createdAt"),
@@ -483,10 +514,34 @@ class GpianoBackupManager(private val context: Context) {
         )
     }
 
+    private fun parseVersion6(library: JSONObject): GpianoBackupSnapshot {
+        val base = parseVersion5(library)
+        val currentRevisionByVersionId = library.arrayOrEmpty("practiceVersions")
+            .mapObjects { item -> item.getString("id") to item.nullableString("currentRevisionId") }
+            .toMap()
+        return base.copy(
+            practiceVersions = base.practiceVersions.map { version ->
+                version.copy(currentRevisionId = currentRevisionByVersionId[version.id])
+            },
+            practiceVersionRevisions = library.arrayOrEmpty("practiceVersionRevisions").mapObjects { item ->
+                PracticeVersionRevision(
+                    id = item.getString("id"),
+                    practiceVersionId = item.getString("practiceVersionId"),
+                    parentRevisionId = item.nullableString("parentRevisionId"),
+                    revisionNumber = item.getInt("revisionNumber"),
+                    kind = item.getString("kind"),
+                    musicXmlRelativePath = item.getString("musicXmlRelativePath"),
+                    operationJson = item.nullableString("operationJson"),
+                    createdAt = item.getLong("createdAt"),
+                )
+            },
+        )
+    }
+
     private data class BackupFileMetadata(val path: String, val size: Long, val sha256: String)
 
     companion object {
-        const val CURRENT_FORMAT_VERSION = 5
+        const val CURRENT_FORMAT_VERSION = 6
         private const val MAX_JSON_BYTES = 10L * 1024 * 1024
         private const val MAX_ENTRY_BYTES = 256L * 1024 * 1024
         private const val MAX_TOTAL_BYTES = 1024L * 1024 * 1024
@@ -503,6 +558,7 @@ private fun GpianoBackupSnapshot.toLibraryJson(): JSONObject = JSONObject()
     .put("revisions", JSONArray().apply { revisions.forEach { put(it.toJson()) } })
     .put("recognitionJobs", JSONArray().apply { recognitionJobs.forEach { put(it.exportCopy().toJson()) } })
     .put("practiceVersions", JSONArray().apply { practiceVersions.forEach { put(it.toJson()) } })
+    .put("practiceVersionRevisions", JSONArray().apply { practiceVersionRevisions.forEach { put(it.toJson()) } })
     .put("practiceAttempts", JSONArray().apply { practiceAttempts.forEach { put(it.toJson()) } })
     .put("midiPerformanceEvents", JSONArray().apply { midiPerformanceEvents.forEach { put(it.toJson()) } })
 
@@ -542,8 +598,14 @@ private fun PracticeVersion.toJson() = JSONObject()
     .put("id", id).put("structureId", structureId).put("baseRevisionId", baseRevisionId)
     .put("title", title).put("purpose", purpose).put("status", status)
     .put("fromMeasure", fromMeasure).put("toMeasure", toMeasure)
-    .put("musicXmlRelativePath", musicXmlRelativePath).put("planJson", planJson)
+    .put("musicXmlRelativePath", musicXmlRelativePath).putNullable("currentRevisionId", currentRevisionId)
+    .put("planJson", planJson)
     .put("differenceJson", differenceJson).put("createdAt", createdAt).put("updatedAt", updatedAt)
+
+private fun PracticeVersionRevision.toJson() = JSONObject()
+    .put("id", id).put("practiceVersionId", practiceVersionId).putNullable("parentRevisionId", parentRevisionId)
+    .put("revisionNumber", revisionNumber).put("kind", kind).put("musicXmlRelativePath", musicXmlRelativePath)
+    .putNullable("operationJson", operationJson).put("createdAt", createdAt)
 
 private fun PracticeAttempt.toJson() = JSONObject()
     .put("id", id).put("structureId", structureId).put("sourceRevisionId", sourceRevisionId)

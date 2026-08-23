@@ -21,3 +21,13 @@ exports/
 .DS_Store
 Thumbs.db
 omr-service/var/
+
+# 本地后端运行环境、工具与密钥配置
+.local-tools/
+scripts/backend.local.sh
+__pycache__/
+*.py[cod]
+
+# 本地临时构建、演示生成与 Office 锁文件
+tmp/
+**/.~*

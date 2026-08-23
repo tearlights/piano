@@ -59,6 +59,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.gpiano.app.data.PracticeVersion
+import com.gpiano.app.data.PracticeVersionRevision
 import com.gpiano.app.data.PracticeVersionStatus
 import com.gpiano.app.scoreworkspace.CorrectionOperation
 import com.gpiano.app.scoreworkspace.MusicXmlSummary
@@ -214,16 +215,28 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
     }
 
     val applyOperation: (CorrectionOperation) -> Unit = { operation ->
+        val capturedPracticeVersion = activePracticeVersion
         val captured = (state as? WorkspaceLoadState.Ready)?.session
         if (captured != null) {
             scope.launch {
                 editInProgress = true
                 editError = null
                 runCatching {
-                    withContext(Dispatchers.Default) { repository.apply(captured, operation) }
+                    withContext(Dispatchers.Default) {
+                        if (capturedPracticeVersion != null) {
+                            practiceVersionRepository.apply(capturedPracticeVersion, operation)
+                        } else {
+                            repository.apply(captured, operation)
+                        }
+                    }
                 }.onSuccess { revised ->
-                    state = WorkspaceLoadState.Ready(revised)
-                    activePracticeVersion = null
+                    if (revised is PracticeVersionDocument) {
+                        activePracticeVersion = revised
+                        inspectedPracticeVersion = revised
+                    } else if (revised is PersistentScoreSession) {
+                        state = WorkspaceLoadState.Ready(revised)
+                        activePracticeVersion = null
+                    }
                 }.onFailure { error ->
                     editError = error.message ?: "无法应用这次校正"
                 }
@@ -232,26 +245,54 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
         }
     }
     val undoRevision: () -> Unit = {
+        val capturedPracticeVersion = activePracticeVersion
         val captured = (state as? WorkspaceLoadState.Ready)?.session
         if (captured != null) {
             scope.launch {
                 editInProgress = true
                 editError = null
-                runCatching { repository.undo(captured) }
-                    .onSuccess { state = WorkspaceLoadState.Ready(it); activePracticeVersion = null }
+                runCatching {
+                    if (capturedPracticeVersion != null) {
+                        practiceVersionRepository.undo(capturedPracticeVersion)
+                    } else {
+                        repository.undo(captured)
+                    }
+                }.onSuccess { revised ->
+                    if (revised is PracticeVersionDocument) {
+                        activePracticeVersion = revised
+                        inspectedPracticeVersion = revised
+                    } else if (revised is PersistentScoreSession) {
+                        state = WorkspaceLoadState.Ready(revised)
+                        activePracticeVersion = null
+                    }
+                }
                     .onFailure { editError = it.message ?: "无法撤销这次校正" }
                 editInProgress = false
             }
         }
     }
     val redoRevision: () -> Unit = {
+        val capturedPracticeVersion = activePracticeVersion
         val captured = (state as? WorkspaceLoadState.Ready)?.session
         if (captured != null) {
             scope.launch {
                 editInProgress = true
                 editError = null
-                runCatching { repository.redo(captured) }
-                    .onSuccess { state = WorkspaceLoadState.Ready(it); activePracticeVersion = null }
+                runCatching {
+                    if (capturedPracticeVersion != null) {
+                        practiceVersionRepository.redo(capturedPracticeVersion)
+                    } else {
+                        repository.redo(captured)
+                    }
+                }.onSuccess { revised ->
+                    if (revised is PracticeVersionDocument) {
+                        activePracticeVersion = revised
+                        inspectedPracticeVersion = revised
+                    } else if (revised is PersistentScoreSession) {
+                        state = WorkspaceLoadState.Ready(revised)
+                        activePracticeVersion = null
+                    }
+                }
                     .onFailure { editError = it.message ?: "无法重做这次校正" }
                 editInProgress = false
             }
@@ -348,7 +389,7 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                         practiceVersionsVisible = false
                         midiPracticeVisible = false
                         aiVisible = false
-                        selectedEventId = currentState.session.score.eventsInMeasure(selectedMeasure).firstOrNull()?.id
+                        selectedEventId = displayedScore.eventsInMeasure(selectedMeasure).firstOrNull()?.id
                         editError = null
                         correctionVisible = true
                     },
@@ -457,11 +498,13 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                 onDismiss = { playbackSettingsVisible = false },
             )
         }
-        if (correctionVisible && ready != null && activePracticeVersion == null) {
+        if (correctionVisible && ready != null) {
+            val correctionPracticeVersion = activePracticeVersion
+            val correctionScore = correctionPracticeVersion?.score ?: ready.session.score
             CorrectionSheet(
-                score = ready.session.score,
+                score = correctionScore,
                 measureIndex = selectedMeasure,
-                revisionNumber = ready.session.revisionNumber,
+                revisionNumber = correctionPracticeVersion?.revisionNumber ?: ready.session.revisionNumber,
                 selectedEventId = selectedEventId,
                 editInProgress = editInProgress,
                 error = editError,
@@ -473,32 +516,56 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                     correctionVisible = false
                     historyVisible = true
                 },
-                canUndo = ready.session.canUndo,
-                canRedo = ready.session.canRedo,
+                canUndo = correctionPracticeVersion?.canUndo ?: ready.session.canUndo,
+                canRedo = correctionPracticeVersion?.canRedo ?: ready.session.canRedo,
                 onDismiss = { if (!editInProgress) correctionVisible = false },
             )
         }
         if (historyVisible && ready != null) {
-            RevisionHistorySheet(
-                session = ready.session,
-                editInProgress = editInProgress,
-                onSelect = { revisionId ->
-                    val captured = (state as? WorkspaceLoadState.Ready)?.session ?: return@RevisionHistorySheet
-                    scope.launch {
-                        editInProgress = true
-                        editError = null
-                        runCatching { repository.checkout(captured, revisionId) }
-                            .onSuccess {
-                                state = WorkspaceLoadState.Ready(it)
-                                activePracticeVersion = null
-                                historyVisible = false
-                            }
-                            .onFailure { editError = it.message ?: "无法切换修订版本" }
-                        editInProgress = false
-                    }
-                },
-                onDismiss = { if (!editInProgress) historyVisible = false },
-            )
+            val historyPracticeVersion = activePracticeVersion
+            if (historyPracticeVersion != null) {
+                PracticeVersionRevisionHistorySheet(
+                    session = historyPracticeVersion,
+                    editInProgress = editInProgress,
+                    onSelect = { revisionId ->
+                        val captured = activePracticeVersion ?: return@PracticeVersionRevisionHistorySheet
+                        scope.launch {
+                            editInProgress = true
+                            editError = null
+                            runCatching { practiceVersionRepository.checkout(captured, revisionId) }
+                                .onSuccess {
+                                    activePracticeVersion = it
+                                    inspectedPracticeVersion = it
+                                    historyVisible = false
+                                }
+                                .onFailure { editError = it.message ?: "无法切换练习版本修订" }
+                            editInProgress = false
+                        }
+                    },
+                    onDismiss = { if (!editInProgress) historyVisible = false },
+                )
+            } else {
+                RevisionHistorySheet(
+                    session = ready.session,
+                    editInProgress = editInProgress,
+                    onSelect = { revisionId ->
+                        val captured = (state as? WorkspaceLoadState.Ready)?.session ?: return@RevisionHistorySheet
+                        scope.launch {
+                            editInProgress = true
+                            editError = null
+                            runCatching { repository.checkout(captured, revisionId) }
+                                .onSuccess {
+                                    state = WorkspaceLoadState.Ready(it)
+                                    activePracticeVersion = null
+                                    historyVisible = false
+                                }
+                                .onFailure { editError = it.message ?: "无法切换修订版本" }
+                            editInProgress = false
+                        }
+                    },
+                    onDismiss = { if (!editInProgress) historyVisible = false },
+                )
+            }
         }
         if (guidanceVisible && ready != null) {
             val guidanceScore = displayedScore ?: ready.session.score
@@ -773,12 +840,12 @@ private fun WorkspaceContent(
     Column(modifier = Modifier.fillMaxSize()) {
         ScoreMetadata(
             summary = summary,
-            revisionNumber = session.revisionNumber,
+            revisionNumber = practiceVersion?.revisionNumber ?: session.revisionNumber,
             practiceVersion = practiceVersion?.version,
             hasSource = session.sourcePage != null,
             showSource = showSource,
             onToggleSource = onToggleSource,
-            onOpenHistory = if (practiceVersion == null) onOpenHistory else onOpenPracticeVersions,
+            onOpenHistory = onOpenHistory,
         )
         MeasureSelector(
             measureCount = summary.measureCount,
@@ -802,11 +869,11 @@ private fun WorkspaceContent(
         SelectedMeasureStatus(
             selectedMeasure = selectedMeasure,
             eventCount = displayedScore.eventsInMeasure(selectedMeasure).size,
-            statusMessage = session.recoveryMessage,
+            statusMessage = practiceVersion?.recoveryMessage ?: session.recoveryMessage,
             playbackEndMeasure = playbackEndMeasure,
             playerState = playerState,
-            canUndo = session.canUndo,
-            canRedo = session.canRedo,
+            canUndo = practiceVersion?.canUndo ?: session.canUndo,
+            canRedo = practiceVersion?.canRedo ?: session.canRedo,
             showSource = showSource,
             onToggleSource = onToggleSource,
             onUndo = onUndo,
@@ -853,7 +920,7 @@ private fun ScoreMetadata(
                 if (practiceVersion == null) {
                     "${summary.measureCount} 小节 · $timeSignature · 修订 $revisionNumber"
                 } else {
-                    "${summary.measureCount} 小节 · ${practiceVersionStatusLabel(practiceVersion.status)}"
+                    "${summary.measureCount} 小节 · ${practiceVersionStatusLabel(practiceVersion.status)} · 修订 $revisionNumber"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1062,13 +1129,16 @@ private fun SelectedMeasureStatus(
             }
             if (practiceVersion != null) {
                 Text(
-                    playerState.error ?: playerState.currentMeasure?.let { "派生版播放第 $it 小节" }
+                    statusMessage ?: playerState.error ?: playerState.currentMeasure?.let { "派生版播放第 $it 小节" }
                     ?: "${practiceVersionStatusLabel(practiceVersion.status)} · 第 $selectedMeasure 小节",
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                    if (canUndo) TextButton(onClick = onUndo) { Text("撤销") }
+                    if (canRedo) TextButton(onClick = onRedo) { Text("重做") }
+                    TextButton(onClick = onOpenCorrection) { Text("校正") }
                     TextButton(onClick = onOpenPracticeVersions) { Text("差异") }
                     TextButton(onClick = onExitPracticeVersion) { Text("主谱") }
                     TextButton(onClick = onOpenGuidance) { Text("指导") }
@@ -1756,6 +1826,91 @@ private fun RevisionHistorySheet(
             }
             session.revisions.forEach { revision ->
                 val current = revision.id == session.revision.id
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clickable(enabled = !current && !editInProgress) { onSelect(revision.id) },
+                    shape = MaterialTheme.shapes.medium,
+                    tonalElevation = if (current) 5.dp else 1.dp,
+                ) {
+                    Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "修订 ${revision.revisionNumber}${if (current) " · 当前" else ""}",
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            Text(
+                                revisionDescription(revision.kind, revision.operationJson),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (!current) Text("切换", color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun PracticeVersionRevisionHistorySheet(
+    session: PracticeVersionDocument,
+    editInProgress: Boolean,
+    onSelect: (String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.72f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("练习版本修订历史", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        "这里只切换当前派生版本；主谱和其他练习版本不会改变。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = onDismiss, enabled = !editInProgress) { Text("完成") }
+            }
+
+            val baseIsCurrent = session.revision == null
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .clickable(enabled = !baseIsCurrent && !editInProgress) { onSelect(null) },
+                shape = MaterialTheme.shapes.medium,
+                tonalElevation = if (baseIsCurrent) 5.dp else 1.dp,
+            ) {
+                Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "修订 0 · 基础候选${if (baseIsCurrent) " · 当前" else ""}",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(
+                            "由 ${session.plan.preset.displayName} 规则生成的稳定恢复点",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (!baseIsCurrent) Text("切换", color = MaterialTheme.colorScheme.primary)
+                }
+            }
+
+            session.revisions.forEach { revision: PracticeVersionRevision ->
+                val current = revision.id == session.revision?.id
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()

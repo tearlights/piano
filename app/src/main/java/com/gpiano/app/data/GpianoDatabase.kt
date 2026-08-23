@@ -13,10 +13,11 @@ import androidx.room.RoomDatabase
         ScoreRevision::class,
         RecognitionJob::class,
         PracticeVersion::class,
+        PracticeVersionRevision::class,
         PracticeAttempt::class,
         MidiPerformanceEvent::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = true,
 )
 abstract class GpianoDatabase : RoomDatabase() {

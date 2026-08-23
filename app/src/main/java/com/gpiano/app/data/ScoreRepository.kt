@@ -33,6 +33,7 @@ class ScoreRepository(private val context: Context) {
                 practiceVersions = database.practiceVersionDao().getAll(),
                 practiceAttempts = database.practiceAttemptDao().getAll(),
                 midiPerformanceEvents = database.practiceAttemptDao().getAllEvents(),
+                practiceVersionRevisions = database.practiceVersionDao().getAllRevisions(),
             )
         }
         GpianoBackupManager(context).export(snapshot, uri)
@@ -52,6 +53,9 @@ class ScoreRepository(private val context: Context) {
                     if (snapshot.revisions.isNotEmpty()) database.scoreStructureDao().restoreRevisions(snapshot.revisions)
                     if (snapshot.recognitionJobs.isNotEmpty()) database.recognitionJobDao().restoreAll(snapshot.recognitionJobs)
                     if (snapshot.practiceVersions.isNotEmpty()) database.practiceVersionDao().restoreAll(snapshot.practiceVersions)
+                    if (snapshot.practiceVersionRevisions.isNotEmpty()) {
+                        database.practiceVersionDao().restoreAllRevisions(snapshot.practiceVersionRevisions)
+                    }
                     if (snapshot.practiceAttempts.isNotEmpty()) database.practiceAttemptDao().restoreAttempts(snapshot.practiceAttempts)
                     if (snapshot.midiPerformanceEvents.isNotEmpty()) {
                         database.practiceAttemptDao().restoreEvents(snapshot.midiPerformanceEvents)

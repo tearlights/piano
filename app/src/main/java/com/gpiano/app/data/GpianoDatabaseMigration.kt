@@ -200,6 +200,35 @@ object GpianoDatabaseMigration {
         }
     }
 
+    val V10_TO_V11 = object : Migration(10, 11) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE practice_versions ADD COLUMN currentRevisionId TEXT")
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_practice_versions_currentRevisionId ON practice_versions(currentRevisionId)",
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS practice_version_revisions (
+                    id TEXT NOT NULL,
+                    practiceVersionId TEXT NOT NULL,
+                    parentRevisionId TEXT,
+                    revisionNumber INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    musicXmlRelativePath TEXT NOT NULL,
+                    operationJson TEXT,
+                    createdAt INTEGER NOT NULL,
+                    PRIMARY KEY(id),
+                    FOREIGN KEY(practiceVersionId) REFERENCES practice_versions(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_practice_version_revisions_practiceVersionId ON practice_version_revisions(practiceVersionId)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_practice_version_revisions_parentRevisionId ON practice_version_revisions(parentRevisionId)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_practice_version_revisions_practiceVersionId_revisionNumber ON practice_version_revisions(practiceVersionId, revisionNumber)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_practice_version_revisions_musicXmlRelativePath ON practice_version_revisions(musicXmlRelativePath)")
+        }
+    }
+
     val ALL = arrayOf(
         V1_TO_V2,
         V2_TO_V3,
@@ -210,5 +239,6 @@ object GpianoDatabaseMigration {
         V7_TO_V8,
         V8_TO_V9,
         V9_TO_V10,
+        V10_TO_V11,
     )
 }

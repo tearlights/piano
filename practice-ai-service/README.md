@@ -2,6 +2,14 @@
 
 该服务把 Android 端已经获得用户逐次授权的最小化选段摘要转发给兼容 Chat Completions JSON 协议的模型。模型密钥只放在服务端环境变量中；App 不发送原始图片或完整 MusicXML。
 
+需要同时启动 OMR 与 AI companion 时，复制并修改 `scripts/backend.local.sh.example`，然后执行：
+
+```bash
+./scripts/start-backend.sh
+```
+
+统一启动器会检查配置、准备 Audiveris、执行健康检查，并在检测到唯一一台 Android 设备时建立两个 `adb reverse` 映射。本文件下方命令仍适合单独调试 AI companion。
+
 启动示例：
 
 ```bash

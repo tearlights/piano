@@ -395,7 +395,7 @@ def extract_mxl(path: Path) -> bytes:
 def main() -> None:
     config = Config.from_environment()
     server = OmrServer(config)
-    print(f"Gpiano OMR companion listening on {config.host}:{config.port}")
+    print(f"Gpiano OMR companion listening on {config.host}:{config.port}", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

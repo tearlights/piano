@@ -2,6 +2,14 @@
 
 该服务在用户自己的电脑上调用 Audiveris，将一张 PNG/JPEG/WebP 琴谱转换为 MusicXML。Android App 不嵌入 Audiveris，也不会在未点击转换时上传原谱。
 
+需要同时启动 OMR 与 AI companion 时，复制并修改 `scripts/backend.local.sh.example`，然后执行：
+
+```bash
+./scripts/start-backend.sh
+```
+
+统一启动器可在本机缺少 Audiveris 时下载、校验并解压官方 5.11.0 Ubuntu 24.04 x86_64 包；本文件下方命令仍适合单独调试 OMR companion。
+
 ## 依赖
 
 - Python 3.11 或更高版本；
@@ -48,4 +56,3 @@ python3 -m unittest discover -s omr-service -p 'test_*.py'
 - 单文件限制为 25 MB；每个任务使用独立目录，子进程不通过 shell 启动。
 - 结果只在 Audiveris 成功导出且 XML 根节点有效时标记 ready。
 - 服务不声称存在 Audiveris 未提供的统一置信度，Android 端始终把首版结果标记为待校正。
-

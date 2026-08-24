@@ -64,6 +64,12 @@
 - 测试：新增 `BackupRestoreDaoTest`，覆盖空快照仍完整清表、子到父清理顺序和父到子插入顺序；Android 全量 JVM 测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### 恢复进程死亡导致文件/数据库跨介质不一致
+
+- 修复：恢复快照的六类文件路径统一重映射到 UUID `restore-generations`；目标路径保证全新，全部文件落盘并 fsync 后才用单个 Room 事务替换 DB。切换前崩溃不覆盖旧文件，切换后崩溃时新文件已存在。下一次恢复会按当前 DB 引用清理孤儿 generation。
+- 测试：`ScoreRepositoryPathTest` 新增 generation 映射、非法 generation 与 `..` 路径拒绝；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### ScoreIR 弱校验与标称小节 tick 溢出
 
 - 修复：ScoreIR 校验新增声部/小节索引一致性、正 divisions/拍号、严格正时值、结束位置 Long 溢出和同 voice/staff 事件重叠检查；播放计划的标称小节长度从运算第一步即使用 Long，并拒绝非正拍号。

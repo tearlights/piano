@@ -25,4 +25,20 @@ class ScoreRepositoryPathTest {
             root.deleteRecursively()
         }
     }
+
+    @Test
+    fun `backup restore uses isolated generation paths`() {
+        val generation = "12345678-1234-1234-1234-123456789abc"
+
+        assertEquals(
+            "restore-generations/$generation/scores/id/page-1.png",
+            restoreGenerationPath(generation, "scores/id/page-1.png"),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            restoreGenerationPath(generation, "../scores/id.pdf")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            restoreGenerationPath("bad", "scores/id.pdf")
+        }
+    }
 }

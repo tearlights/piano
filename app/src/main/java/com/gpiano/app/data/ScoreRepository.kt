@@ -29,12 +29,16 @@ class ScoreRepository(private val context: Context) {
         val backupManager = GpianoBackupManager(context)
         backupManager.stage(uri).use { staged ->
             val previousPaths = backupManager.referencedPaths(currentSnapshot())
-            val files = installStagedFiles(staged)
+            cleanupRestoreGenerations(previousPaths)
+            val generation = UUID.randomUUID().toString()
+            val restoredSnapshot = remapBackupFilePaths(staged.snapshot, generation)
+            val restoredPaths = backupManager.referencedPaths(restoredSnapshot)
+            val sourceByTarget = staged.dataPaths.associateBy { restoreGenerationPath(generation, it) }
+            val files = installStagedFiles(staged, sourceByTarget)
             try {
-                val snapshot = staged.snapshot
-                database.backupRestoreDao().replaceWith(snapshot)
+                database.backupRestoreDao().replaceWith(restoredSnapshot)
                 files.complete()
-                (previousPaths - staged.dataPaths).forEach { stalePath ->
+                (previousPaths - restoredPaths).forEach { stalePath ->
                     runCatching { resolveRepositoryPath(context.filesDir, stalePath).delete() }
                 }
             } catch (error: Throwable) {
@@ -196,26 +200,17 @@ class ScoreRepository(private val context: Context) {
         else -> "jpg"
     }
 
-    private fun installStagedFiles(staged: StagedGpianoBackup): BackupFileCommit {
+    private fun installStagedFiles(staged: StagedGpianoBackup, sourceByTarget: Map<String, String>): BackupFileCommit {
         val rollbackRoot = File(context.cacheDir, "backup-rollback/${UUID.randomUUID()}")
         check(rollbackRoot.mkdirs()) { "无法创建恢复回滚目录" }
         val changes = mutableListOf<BackupFileChange>()
         try {
-            staged.dataPaths.forEach { relativePath ->
-                val source = resolveRepositoryPath(staged.directory, relativePath)
-                val target = resolveRepositoryPath(context.filesDir, relativePath)
+            sourceByTarget.forEach { (targetPath, sourcePath) ->
+                val source = resolveRepositoryPath(staged.directory, sourcePath)
+                val target = resolveRepositoryPath(context.filesDir, targetPath)
                 target.parentFile?.mkdirs()
-                val rollback = if (target.exists()) {
-                    resolveRepositoryPath(rollbackRoot, relativePath).also { backup ->
-                        backup.parentFile?.mkdirs()
-                        target.inputStream().buffered().use { input ->
-                            FileOutputStream(backup).buffered().use { input.copyTo(it) }
-                        }
-                    }
-                } else {
-                    null
-                }
-                changes += BackupFileChange(target, rollback)
+                check(!target.exists()) { "恢复 generation 路径发生冲突" }
+                changes += BackupFileChange(target, null)
                 val temporary = File(target.parentFile, ".${target.name}.${UUID.randomUUID()}.restore")
                 try {
                     FileOutputStream(temporary).use { output ->
@@ -243,7 +238,38 @@ class ScoreRepository(private val context: Context) {
         }
     }
 
+    private fun cleanupRestoreGenerations(referencedPaths: Set<String>) {
+        val root = File(context.filesDir, RESTORE_GENERATIONS)
+        val referencedGenerations = referencedPaths.mapNotNull { path ->
+            path.takeIf { it.startsWith("$RESTORE_GENERATIONS/") }?.substringAfter('/')?.substringBefore('/')
+        }.toSet()
+        root.listFiles()?.filter { it.isDirectory && it.name !in referencedGenerations }?.forEach(File::deleteRecursively)
+    }
+
 }
+
+internal fun restoreGenerationPath(generation: String, originalPath: String): String {
+    require(generation.matches(Regex("[0-9a-f-]{36}"))) { "恢复 generation 标识无效" }
+    require(originalPath.isNotBlank() && !File(originalPath).isAbsolute) { "恢复源路径无效" }
+    val normalized = originalPath.replace('\\', '/')
+    require(normalized.split('/').none { it.isBlank() || it == "." || it == ".." }) { "恢复源路径无效" }
+    return "$RESTORE_GENERATIONS/$generation/$normalized"
+}
+
+internal fun remapBackupFilePaths(snapshot: GpianoBackupSnapshot, generation: String): GpianoBackupSnapshot {
+    fun path(value: String): String = value.takeIf(String::isNotBlank)?.let { restoreGenerationPath(generation, it) }.orEmpty()
+    fun nullablePath(value: String?): String? = value?.let { restoreGenerationPath(generation, it) }
+    return snapshot.copy(
+        scores = snapshot.scores.map { it.copy(relativePath = path(it.relativePath)) },
+        pages = snapshot.pages.map { it.copy(relativePath = nullablePath(it.relativePath)) },
+        structures = snapshot.structures.map { it.copy(sourceMapRelativePath = nullablePath(it.sourceMapRelativePath)) },
+        revisions = snapshot.revisions.map { it.copy(musicXmlRelativePath = path(it.musicXmlRelativePath)) },
+        practiceVersions = snapshot.practiceVersions.map { it.copy(musicXmlRelativePath = path(it.musicXmlRelativePath)) },
+        practiceVersionRevisions = snapshot.practiceVersionRevisions.map { it.copy(musicXmlRelativePath = path(it.musicXmlRelativePath)) },
+    )
+}
+
+private const val RESTORE_GENERATIONS = "restore-generations"
 
 internal fun resolveRepositoryPath(root: File, relativePath: String): File {
     require(relativePath.isNotBlank() && !File(relativePath).isAbsolute) { "文件路径无效" }

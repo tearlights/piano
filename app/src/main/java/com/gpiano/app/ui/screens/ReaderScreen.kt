@@ -36,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,12 +56,12 @@ import kotlinx.coroutines.flow.flowOf
 
 @Composable
 fun ReaderScreen(score: Score?, onBack: () -> Unit, onToggleFavorite: () -> Unit, isFavorite: Boolean, onMoveToFolder: (String?) -> Unit, onDelete: () -> Unit) {
-    var controlsVisible by remember { mutableStateOf(true) }
-    var metronomeVisible by remember { mutableStateOf(false) }
-    var pageOrderVisible by remember { mutableStateOf(false) }
-    var folderVisible by remember { mutableStateOf(false) }
-    var deleteConfirmationVisible by remember { mutableStateOf(false) }
-    var page by remember { mutableIntStateOf(1) }
+    var controlsVisible by rememberSaveable { mutableStateOf(true) }
+    var metronomeVisible by rememberSaveable { mutableStateOf(false) }
+    var pageOrderVisible by rememberSaveable { mutableStateOf(false) }
+    var folderVisible by rememberSaveable { mutableStateOf(false) }
+    var deleteConfirmationVisible by rememberSaveable { mutableStateOf(false) }
+    var page by rememberSaveable(score?.id) { mutableIntStateOf(1) }
     val context = LocalContext.current.applicationContext
     val repository = remember(score?.id) { ScoreRepository(context) }
     val pagesFlow = remember(score?.id, repository) {

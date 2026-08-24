@@ -166,6 +166,12 @@
 - 测试：`rg` 确认被删 composable 无调用方；Android JVM 全量测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### 配置变更丢失阅读与校正现场
+
+- 修复：导航只保存 `openedScoreId` 并从 ViewModel 的 score flow 重新解析对象；阅读器页码和面板、工作区小节与试听参数均使用 `rememberSaveable`。`ScorePitch`/`MusicalDuration` 草稿使用严格重建的自定义 Saver，避免保存 Repository 会话或 Android 对象。
+- 测试：Android JVM 全量测试与 Debug 构建通过；Saver 恢复路径会重新触发 `ScorePitch`/`MusicalDuration` 构造校验，无效 Bundle 值返回 null 并使用初始值。
+- 提交：见包含本节的独立提交。
+
 ### Room v1-v6 升级缺少 `lastOpenedAt`
 
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。

@@ -26,7 +26,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import com.gpiano.app.scoreworkspace.WorkspaceSelectionStore
 import com.gpiano.app.ui.screens.ImportedLibraryScreen
-import com.gpiano.app.data.Score
 import com.gpiano.app.ui.screens.ReaderScreen
 import com.gpiano.app.ui.screens.RealFavoritesScreen
 import com.gpiano.app.ui.screens.RealFoldersScreen
@@ -46,8 +45,7 @@ fun GpianoApp() {
     val context = LocalContext.current.applicationContext
     val workspaceSelectionStore = remember { WorkspaceSelectionStore(context) }
     var destination by rememberSaveable { mutableStateOf(Destination.Library) }
-    var readerOpen by remember { mutableStateOf(false) }
-    var openedScore by remember { mutableStateOf<Score?>(null) }
+    var openedScoreId by rememberSaveable { mutableStateOf<String?>(null) }
     val libraryViewModel: LibraryViewModel = viewModel()
     val scores by libraryViewModel.scores.collectAsState()
     val favorites by libraryViewModel.favorites.collectAsState()
@@ -58,14 +56,15 @@ fun GpianoApp() {
     val omrSettingsState by libraryViewModel.omrSettingsState.collectAsState()
     val aiSettingsState by libraryViewModel.aiSettingsState.collectAsState()
     val importInProgress by libraryViewModel.importInProgress.collectAsState()
+    val openedScore = scores.firstOrNull { it.id == openedScoreId }
     var autoRestoreWorkspace by rememberSaveable { mutableStateOf(workspaceSelectionStore.autoRestoreEnabled()) }
     var workspaceStructureId by rememberSaveable {
         mutableStateOf(workspaceSelectionStore.load().takeIf { autoRestoreWorkspace })
     }
 
-    if (readerOpen) {
-        BackHandler { readerOpen = false }
-        ReaderScreen(score = openedScore, onBack = { readerOpen = false }, onToggleFavorite = { openedScore?.let { score -> libraryViewModel.toggleFavorite(score); openedScore = score.copy(isFavorite = !score.isFavorite) } }, isFavorite = openedScore?.isFavorite == true, onMoveToFolder = { folderId -> openedScore?.let { libraryViewModel.moveToFolder(it, folderId) } }, onDelete = { openedScore?.let { libraryViewModel.delete(it) }; readerOpen = false; openedScore = null })
+    if (openedScoreId != null) {
+        BackHandler { openedScoreId = null }
+        ReaderScreen(score = openedScore, onBack = { openedScoreId = null }, onToggleFavorite = { openedScore?.let(libraryViewModel::toggleFavorite) }, isFavorite = openedScore?.isFavorite == true, onMoveToFolder = { folderId -> openedScore?.let { libraryViewModel.moveToFolder(it, folderId) } }, onDelete = { openedScore?.let(libraryViewModel::delete); openedScoreId = null })
         return
     }
 
@@ -98,7 +97,7 @@ fun GpianoApp() {
                 onImport = libraryViewModel::import,
                 onImportAll = libraryViewModel::importAll,
                 onRename = libraryViewModel::rename,
-                onOpenReader = { score -> libraryViewModel.open(score); openedScore = score; readerOpen = true },
+                onOpenReader = { score -> libraryViewModel.open(score); openedScoreId = score.id },
                 recognitionJobs = recognitionJobs,
                 onRecognize = libraryViewModel::recognize,
                 onRetryRecognition = libraryViewModel::retryRecognition,
@@ -109,7 +108,7 @@ fun GpianoApp() {
                     destination = Destination.Workspace
                 },
             )
-            Destination.Favorites -> RealFavoritesScreen(contentPadding = padding, scores = favorites, onOpenReader = { score -> libraryViewModel.open(score); openedScore = score; readerOpen = true })
+            Destination.Favorites -> RealFavoritesScreen(contentPadding = padding, scores = favorites, onOpenReader = { score -> libraryViewModel.open(score); openedScoreId = score.id })
             Destination.Folders -> RealFoldersScreen(
                 contentPadding = padding,
                 folders = folders,

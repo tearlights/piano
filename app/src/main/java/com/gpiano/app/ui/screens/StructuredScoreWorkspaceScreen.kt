@@ -58,6 +58,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -133,8 +135,8 @@ fun StructuredScoreWorkspaceScreen(
     var availableStructures by remember { mutableStateOf<List<ScoreStructure>>(emptyList()) }
     var structureListLoading by remember { mutableStateOf(false) }
     var structureListError by remember { mutableStateOf<String?>(null) }
-    var selectedMeasure by remember { mutableIntStateOf(1) }
-    var correctionVisible by remember { mutableStateOf(false) }
+    var selectedMeasure by rememberSaveable(structureId) { mutableIntStateOf(1) }
+    var correctionVisible by rememberSaveable(structureId) { mutableStateOf(false) }
     var historyVisible by remember { mutableStateOf(false) }
     var guidanceVisible by remember { mutableStateOf(false) }
     var aiVisible by remember { mutableStateOf(false) }
@@ -143,12 +145,12 @@ fun StructuredScoreWorkspaceScreen(
     var midiPlan by remember { mutableStateOf<PlaybackPlan?>(null) }
     var showSource by remember(structureId) { mutableStateOf(false) }
     var playbackSettingsVisible by remember { mutableStateOf(false) }
-    var playbackEndMeasure by remember { mutableIntStateOf(1) }
-    var playbackSpeed by remember { mutableStateOf(0.75) }
-    var playbackHand by remember { mutableStateOf(PlaybackHand.Both) }
-    var playbackLooping by remember { mutableStateOf(false) }
+    var playbackEndMeasure by rememberSaveable(structureId) { mutableIntStateOf(1) }
+    var playbackSpeed by rememberSaveable(structureId) { mutableStateOf(0.75) }
+    var playbackHand by rememberSaveable(structureId) { mutableStateOf(PlaybackHand.Both) }
+    var playbackLooping by rememberSaveable(structureId) { mutableStateOf(false) }
     var playerState by remember { mutableStateOf(ScorePlayerUiState()) }
-    var selectedEventId by remember { mutableStateOf<String?>(null) }
+    var selectedEventId by rememberSaveable(structureId) { mutableStateOf<String?>(null) }
     var editInProgress by remember { mutableStateOf(false) }
     var editError by remember { mutableStateOf<String?>(null) }
     var practiceVersions by remember(structureId) { mutableStateOf<List<PracticeVersion>>(emptyList()) }
@@ -1895,7 +1897,7 @@ private fun DurationCorrectionEditor(
                 ) + listOfNotNull(current)
             ).distinct().filter { runCatching { it.toDivisions(measure.divisions) }.isSuccess }
     }
-    var draft by remember(event.id, event.durationDivisions) {
+    var draft by rememberSaveable(event.id, event.durationDivisions, stateSaver = MusicalDurationSaver) {
         mutableStateOf(current ?: candidates.first())
     }
     Text("时值", style = MaterialTheme.typography.titleSmall)
@@ -1928,7 +1930,7 @@ private fun RestToNoteEditor(
     editInProgress: Boolean,
     onApply: (ScorePitch) -> Unit,
 ) {
-    var draft by remember(event.id) { mutableStateOf(ScorePitch('C', 0, 4)) }
+    var draft by rememberSaveable(event.id, stateSaver = ScorePitchSaver) { mutableStateOf(ScorePitch('C', 0, 4)) }
     Text("休止符", style = MaterialTheme.typography.titleSmall)
     Text(
         "选择要恢复的音高",
@@ -1951,7 +1953,7 @@ private fun PitchCorrectionEditor(
     onApply: (ScorePitch) -> Unit,
 ) {
     val original = requireNotNull(event.pitch)
-    var draft by remember(event.id, original) { mutableStateOf(original) }
+    var draft by rememberSaveable(event.id, original, stateSaver = ScorePitchSaver) { mutableStateOf(original) }
     Text("音高", style = MaterialTheme.typography.titleSmall)
     Text(
         "当前 ${original.displayName} · MIDI ${original.midi}",
@@ -2253,3 +2255,28 @@ private fun RangeMeasurePicker(
         }
     }
 }
+
+private val ScorePitchSaver = Saver<ScorePitch, String>(
+    save = { "${it.step},${it.alter},${it.octave}" },
+    restore = { encoded ->
+        encoded.split(',').takeIf { it.size == 3 }?.let { values ->
+            runCatching { ScorePitch(values[0].single(), values[1].toInt(), values[2].toInt()) }.getOrNull()
+        }
+    },
+)
+
+private val MusicalDurationSaver = Saver<MusicalDuration, String>(
+    save = { "${it.noteType},${it.dots},${it.actualNotes ?: -1},${it.normalNotes ?: -1}" },
+    restore = { encoded ->
+        encoded.split(',').takeIf { it.size == 4 }?.let { values ->
+            runCatching {
+                MusicalDuration(
+                    noteType = values[0],
+                    dots = values[1].toInt(),
+                    actualNotes = values[2].toInt().takeIf { it >= 0 },
+                    normalNotes = values[3].toInt().takeIf { it >= 0 },
+                )
+            }.getOrNull()
+        }
+    },
+)

@@ -16,6 +16,15 @@ class GpianoDatabaseMigrationTest {
         assertTrue(statements.contains("ALTER TABLE scores ADD COLUMN lastOpenedAt INTEGER"))
     }
 
+    @Test
+    fun `database open explicitly enables foreign key enforcement`() {
+        val statements = mutableListOf<String>()
+
+        enableForeignKeysCallback.onOpen(recordingDatabase(statements))
+
+        assertTrue(statements.contains("PRAGMA foreign_keys=ON"))
+    }
+
     private fun recordingDatabase(statements: MutableList<String>): SupportSQLiteDatabase =
         Proxy.newProxyInstance(
             SupportSQLiteDatabase::class.java.classLoader,

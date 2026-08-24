@@ -2,6 +2,15 @@ package com.gpiano.app.data
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.sqlite.db.SupportSQLiteDatabase
+
+internal val enableForeignKeysCallback = object : RoomDatabase.Callback() {
+    override fun onOpen(db: SupportSQLiteDatabase) {
+        super.onOpen(db)
+        db.execSQL("PRAGMA foreign_keys=ON")
+    }
+}
 
 object GpianoDatabaseProvider {
     @Volatile
@@ -13,6 +22,7 @@ object GpianoDatabaseProvider {
             GpianoDatabase::class.java,
             "gpiano.db",
         ).addMigrations(*GpianoDatabaseMigration.ALL)
+            .addCallback(enableForeignKeysCallback)
             .build()
             .also { instance = it }
     }

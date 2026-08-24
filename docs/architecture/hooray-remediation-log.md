@@ -37,3 +37,9 @@
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。
 - 测试：新增 `GpianoDatabaseMigrationTest` 直接执行迁移并核对 DDL；Android JVM 全量测试与 Debug 构建通过。
 - 提交：本项提交完成后回填 SHA。
+
+### SQLite 外键声明未执行
+
+- 修复：Room 数据库每次打开时显式执行 `PRAGMA foreign_keys=ON`，使结构、识别任务、修订、练习版本和演奏事件的级联/置空约束生效。
+- 测试：`GpianoDatabaseMigrationTest` 直接执行数据库 callback 并核对外键启用语句；Android JVM 全量测试与 Debug 构建通过。
+- 提交：本项提交完成后回填 SHA。

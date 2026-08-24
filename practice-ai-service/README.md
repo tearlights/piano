@@ -20,7 +20,7 @@ export GPIANO_MODEL_NAME='provider-model'
 python3 practice-ai-service/server.py
 ```
 
-可选变量：`GPIANO_AI_HOST`（默认 `127.0.0.1`）、`GPIANO_AI_PORT`（默认 `8766`）、`GPIANO_MODEL_TIMEOUT`（默认 90 秒）。正式部署应使用 HTTPS 反向代理；不要把任何令牌提交到项目目录。仅本机集成测试可显式设置 `GPIANO_AI_ALLOW_INSECURE_LOOPBACK=true`，它只允许模型地址使用 HTTP loopback，不允许远端明文连接。
+可选变量：`GPIANO_AI_HOST`（默认 `127.0.0.1`）、`GPIANO_AI_PORT`（默认 `8766`）、`GPIANO_MODEL_TIMEOUT`（默认 90 秒）、`GPIANO_AI_SOCKET_TIMEOUT`（默认 15 秒）和 `GPIANO_AI_HTTP_WORKERS`（默认 16）。socket 超时同时约束客户端读取和响应写入；HTTP worker 上限用于避免慢连接生成无界线程。正式部署应使用 HTTPS 反向代理；不要把任何令牌提交到项目目录。仅本机集成测试可显式设置 `GPIANO_AI_ALLOW_INSECURE_LOOPBACK=true`，它只允许模型地址使用 HTTP loopback，不允许远端明文连接。
 
 测试：
 

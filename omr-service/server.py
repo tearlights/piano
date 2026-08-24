@@ -45,6 +45,8 @@ class Config:
     audiveris_bin: str
     timeout_seconds: int
     workers: int
+    socket_timeout_seconds: int = 15
+    http_workers: int = 16
 
     @classmethod
     def from_environment(cls) -> "Config":
@@ -60,6 +62,8 @@ class Config:
             audiveris_bin=os.environ.get("AUDIVERIS_BIN", "audiveris"),
             timeout_seconds=int(os.environ.get("GPIANO_OMR_TIMEOUT", "900")),
             workers=max(1, int(os.environ.get("GPIANO_OMR_WORKERS", "1"))),
+            socket_timeout_seconds=max(1, int(os.environ.get("GPIANO_OMR_SOCKET_TIMEOUT", "15"))),
+            http_workers=max(1, int(os.environ.get("GPIANO_OMR_HTTP_WORKERS", "16"))),
         )
 
 
@@ -226,13 +230,42 @@ class RecognitionFailure(Exception):
         self.code = code
 
 
-class OmrServer(ThreadingHTTPServer):
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+
+    def configure_transport(self, socket_timeout_seconds: int, http_workers: int) -> None:
+        self.socket_timeout_seconds = socket_timeout_seconds
+        self._request_slots = threading.BoundedSemaphore(http_workers)
+
+    def get_request(self) -> tuple[Any, Any]:
+        request, client_address = super().get_request()
+        request.settimeout(self.socket_timeout_seconds)
+        return request, client_address
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._request_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
+
+
+class OmrServer(BoundedThreadingHTTPServer):
 
     def __init__(self, config: Config):
         self.config = config
         self.store = JobStore(config.data_dir / "jobs")
         self.runner = AudiverisRunner(config, self.store)
+        self.configure_transport(config.socket_timeout_seconds, config.http_workers)
         super().__init__((config.host, config.port), OmrHandler)
         for job_id in self.store.resumable():
             self.runner.submit(job_id)

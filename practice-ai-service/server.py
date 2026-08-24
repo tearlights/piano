@@ -8,6 +8,7 @@ import ipaddress
 import json
 import os
 import socket
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,6 +33,8 @@ class Config:
     provider_token: str
     model: str
     timeout_seconds: int
+    socket_timeout_seconds: int = 15
+    http_workers: int = 16
 
     @property
     def model_ready(self) -> bool:
@@ -56,6 +59,8 @@ class Config:
             provider_token=os.environ.get("GPIANO_MODEL_API_KEY", "").strip(),
             model=os.environ.get("GPIANO_MODEL_NAME", "").strip(),
             timeout_seconds=max(5, int(os.environ.get("GPIANO_MODEL_TIMEOUT", "90"))),
+            socket_timeout_seconds=max(1, int(os.environ.get("GPIANO_AI_SOCKET_TIMEOUT", "15"))),
+            http_workers=max(1, int(os.environ.get("GPIANO_AI_HTTP_WORKERS", "16"))),
         )
 
 
@@ -250,11 +255,40 @@ def provider_request(
     return normalize_model_response(content, payload)
 
 
-class PracticeAiServer(ThreadingHTTPServer):
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+
+    def configure_transport(self, socket_timeout_seconds: int, http_workers: int) -> None:
+        self.socket_timeout_seconds = socket_timeout_seconds
+        self._request_slots = threading.BoundedSemaphore(http_workers)
+
+    def get_request(self) -> tuple[socket.socket, Any]:
+        request, client_address = super().get_request()
+        request.settimeout(self.socket_timeout_seconds)
+        return request, client_address
+
+    def process_request(self, request: socket.socket, client_address: Any) -> None:
+        if not self._request_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request: socket.socket, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
+
+
+class PracticeAiServer(BoundedThreadingHTTPServer):
 
     def __init__(self, config: Config):
         self.config = config
+        self.configure_transport(config.socket_timeout_seconds, config.http_workers)
         super().__init__((config.host, config.port), PracticeAiHandler)
 
 

@@ -43,6 +43,8 @@ adb reverse tcp:8765 tcp:8765
 | `GPIANO_OMR_DATA` | `omr-service/var` | 隔离任务目录 |
 | `GPIANO_OMR_WORKERS` | `1` | 并行 Audiveris 进程数 |
 | `GPIANO_OMR_TIMEOUT` | `900` | 单任务超时秒数 |
+| `GPIANO_OMR_SOCKET_TIMEOUT` | `15` | 单个 HTTP 连接读写超时秒数 |
+| `GPIANO_OMR_HTTP_WORKERS` | `16` | 同时处理的 HTTP 连接上限；与 Audiveris 进程数独立 |
 
 运行服务测试：
 

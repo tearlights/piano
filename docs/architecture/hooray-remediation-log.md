@@ -88,6 +88,12 @@
 - 测试：`python -m unittest discover -s practice-ai-service -p 'test_*.py'`，7 项通过，覆盖私网地址、开发 loopback 和禁重定向。
 - 提交：本项提交完成后回填 SHA。
 
+### AI/OMR HTTP 慢连接与无界线程
+
+- 修复：两个伴随服务在接受 socket 后设置可配置的读写超时，并在创建请求线程前以有界信号量占用容量；容量耗尽时关闭新连接。请求线程无论正常完成或抛出异常都会释放容量。网络请求并发与 OMR 的 Audiveris 进程池分别配置。
+- 测试：`python -m unittest discover -s practice-ai-service -p 'test_*.py'` 9 项通过；`python -m unittest discover -s omr-service -p 'test_*.py'` 7 项通过。新增用例核对 accepted socket 超时及超出 worker 上限时不再派生线程。
+- 提交：见包含本节的独立提交。
+
 ### Room v1-v6 升级缺少 `lastOpenedAt`
 
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。

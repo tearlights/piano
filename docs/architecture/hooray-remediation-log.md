@@ -52,6 +52,12 @@
 - 测试：新增 `GpianoBackupLimitsTest`，覆盖边界值接受和超 1 字节拒绝；Android 全量 JVM 测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### 识别诊断信息明文进入备份
+
+- 修复：识别任务导出副本清除 `remoteJobId`、`errorMessage` 与 `diagnosticsJson`，保留稳定 `errorCode` 和状态以支持本地恢复提示。
+- 测试：`GpianoBackupLimitsTest` 使用含内部 URL/token 和响应片段的任务验证三项敏感字段清空、分类与状态保留；Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### AI provider SSRF 与密钥重定向
 
 - 修复：模型端点启动校验会解析全部地址并拒绝非公网 IP；仅显式开发模式允许 HTTP loopback。provider 请求使用禁止重定向的 opener，授权头不会跟随 30x 发往其他目标。

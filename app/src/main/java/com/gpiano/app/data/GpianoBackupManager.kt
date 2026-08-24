@@ -560,7 +560,7 @@ private fun GpianoBackupSnapshot.toLibraryJson(): JSONObject = JSONObject()
     .put("folders", JSONArray().apply { folders.forEach { put(it.toJson()) } })
     .put("structures", JSONArray().apply { structures.forEach { put(it.toJson()) } })
     .put("revisions", JSONArray().apply { revisions.forEach { put(it.toJson()) } })
-    .put("recognitionJobs", JSONArray().apply { recognitionJobs.forEach { put(it.exportCopy().toJson()) } })
+    .put("recognitionJobs", JSONArray().apply { recognitionJobs.forEach { put(it.sanitizedForBackup().toJson()) } })
     .put("practiceVersions", JSONArray().apply { practiceVersions.forEach { put(it.toJson()) } })
     .put("practiceVersionRevisions", JSONArray().apply { practiceVersionRevisions.forEach { put(it.toJson()) } })
     .put("practiceAttempts", JSONArray().apply { practiceAttempts.forEach { put(it.toJson()) } })
@@ -628,7 +628,11 @@ private fun MidiPerformanceEvent.toJson() = JSONObject()
     .put("midiPitch", midiPitch).put("velocity", velocity).put("onsetNanos", onsetNanos)
     .putNullable("durationNanos", durationNanos)
 
-private fun RecognitionJob.exportCopy(): RecognitionJob = copy(remoteJobId = null)
+internal fun RecognitionJob.sanitizedForBackup(): RecognitionJob = copy(
+    remoteJobId = null,
+    errorMessage = null,
+    diagnosticsJson = null,
+)
 
 private fun RecognitionJob.restoredCopy(): RecognitionJob = when {
     status == RecognitionJobStatus.Ready && resultStructureId != null -> copy(remoteJobId = null)

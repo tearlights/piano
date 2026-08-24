@@ -143,16 +143,13 @@ class ScoreRepository(private val context: Context) {
     fun observeBookmarks(scoreId: String): Flow<List<Bookmark>> = database.bookmarkDao().observe(scoreId)
 
     suspend fun toggleBookmark(scoreId: String, page: Int) {
-        if (database.bookmarkDao().exists(scoreId, page)) database.bookmarkDao().delete(scoreId, page) else database.bookmarkDao().insert(Bookmark(scoreId, page, System.currentTimeMillis()))
+        database.bookmarkDao().toggle(scoreId, page, System.currentTimeMillis())
     }
 
     fun observePages(scoreId: String): Flow<List<ScorePage>> = database.scorePageDao().observe(scoreId)
 
     suspend fun movePage(scoreId: String, displayIndex: Int, direction: Int) {
-        val pages = database.scorePageDao().observe(scoreId).first()
-        val current = pages.indexOfFirst { it.displayIndex == displayIndex }
-        val target = current + direction
-        if (current >= 0 && target in pages.indices) database.scorePageDao().swap(scoreId, pages[current], pages[target])
+        database.scorePageDao().move(scoreId, displayIndex, direction)
     }
 
     suspend fun restorePageOrder(scoreId: String) = database.scorePageDao().restoreOriginalOrder(scoreId)

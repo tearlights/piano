@@ -34,6 +34,12 @@
 - 测试：新增 `OperationGateTest`，8 个线程同时竞争只允许一个进入，并验证释放后可再次进入；Android 全量 JVM 测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### 书签/页序读改写竞态与 Reader 重订阅
+
+- 修复：书签 toggle 下沉到 `BookmarkDao` 的 Room 事务；页序移动在 `ScorePageDao` 同一事务内重新读取当前顺序并交换，拒绝非 ±1 方向。Reader 与页序面板按 score id `remember` 同一个页面 Flow，页面减少时把当前位置收敛到有效范围。
+- 测试：新增 `DaoAtomicOperationsTest`，覆盖书签插入/删除切换、基于当前顺序的相邻页交换和非法方向；Android 全量 JVM 测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### AI provider SSRF 与密钥重定向
 
 - 修复：模型端点启动校验会解析全部地址并拒绝非公网 IP；仅显式开发模式允许 HTTP loopback。provider 请求使用禁止重定向的 opener，授权头不会跟随 30x 发往其他目标。

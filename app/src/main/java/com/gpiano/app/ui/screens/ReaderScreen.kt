@@ -36,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import com.gpiano.app.ui.theme.ReaderBackdrop
 import com.gpiano.app.data.Score
 import com.gpiano.app.data.ScoreRepository
+import kotlinx.coroutines.flow.flowOf
 
 @Composable
 fun ReaderScreen(score: Score?, onBack: () -> Unit, onToggleFavorite: () -> Unit, isFavorite: Boolean, onMoveToFolder: (String?) -> Unit, onDelete: () -> Unit) {
@@ -61,8 +63,12 @@ fun ReaderScreen(score: Score?, onBack: () -> Unit, onToggleFavorite: () -> Unit
     var page by remember { mutableIntStateOf(1) }
     val context = LocalContext.current.applicationContext
     val repository = remember(score?.id) { ScoreRepository(context) }
-    val pages by (score?.let { repository.observePages(it.id) } ?: kotlinx.coroutines.flow.flowOf(emptyList())).collectAsState(emptyList())
+    val pagesFlow = remember(score?.id, repository) {
+        score?.let { repository.observePages(it.id) } ?: flowOf(emptyList())
+    }
+    val pages by pagesFlow.collectAsState(emptyList())
     val pageCount = pages.size.coerceAtLeast(1)
+    LaunchedEffect(pageCount) { page = page.coerceIn(1, pageCount) }
     val currentPage = pages.getOrNull(page - 1)
     val sourcePage = currentPage?.sourceIndex?.plus(1) ?: page
 

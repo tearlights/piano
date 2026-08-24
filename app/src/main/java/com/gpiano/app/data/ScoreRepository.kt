@@ -35,7 +35,7 @@ class ScoreRepository(private val context: Context) {
                 database.backupRestoreDao().replaceWith(snapshot)
                 files.complete()
                 (previousPaths - staged.dataPaths).forEach { stalePath ->
-                    runCatching { resolveInside(context.filesDir, stalePath).delete() }
+                    runCatching { resolveRepositoryPath(context.filesDir, stalePath).delete() }
                 }
             } catch (error: Throwable) {
                 files.rollback()
@@ -49,22 +49,34 @@ class ScoreRepository(private val context: Context) {
         require(uris.isNotEmpty()) { "未选择图片" }
         val resolver = context.contentResolver
         val id = UUID.randomUUID().toString()
-        val pages = uris.mapIndexed { index, uri ->
-            val type = resolver.getType(uri).orEmpty()
-            require(type.startsWith("image/")) { "仅支持图片" }
-            val destination = File(context.filesDir, "scores/" + id + "/page-" + (index + 1) + "." + extensionFor(type))
-            destination.parentFile?.mkdirs()
-            resolver.openInputStream(uri)?.use { input -> destination.outputStream().use(input::copyTo) } ?: error("无法读取图片")
-            ScorePage(id, index, index, destination.relativeTo(context.filesDir).path)
+        val groupDirectory = resolveRepositoryPath(context.filesDir, "scores/$id")
+        try {
+            val pages = uris.mapIndexed { index, uri ->
+                val type = resolver.getType(uri).orEmpty()
+                require(type.startsWith("image/")) { "仅支持图片" }
+                val destination = resolveRepositoryPath(
+                    context.filesDir,
+                    "scores/$id/page-${index + 1}.${extensionFor(type)}",
+                )
+                destination.parentFile?.mkdirs()
+                resolver.openInputStream(uri)?.use { input -> destination.outputStream().use(input::copyTo) }
+                    ?: error("无法读取图片")
+                ScorePage(id, index, index, destination.relativeTo(context.filesDir).path)
+            }
+            val firstName = resolver.query(uris.first(), arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                cursor.takeIf { it.moveToFirst() }?.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
+            } ?: "图片琴谱"
+            val title = firstName.substringBeforeLast('.', firstName)
+            val score = Score(id, title, title, "", "application/x-gpiano-image-group", System.currentTimeMillis())
+            database.withTransaction {
+                database.scoreDao().upsert(score)
+                database.scorePageDao().insertAll(pages)
+            }
+            score
+        } catch (error: Throwable) {
+            groupDirectory.deleteRecursively()
+            throw error
         }
-        val firstName = resolver.query(uris.first(), arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-            cursor.takeIf { it.moveToFirst() }?.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
-        } ?: "图片琴谱"
-        val title = firstName.substringBeforeLast('.', firstName)
-        val score = Score(id, title, title, "", "application/x-gpiano-image-group", System.currentTimeMillis())
-        database.scoreDao().upsert(score)
-        database.scorePageDao().insertAll(pages)
-        score
     }
 
     suspend fun import(uri: Uri): Score = withContext(Dispatchers.IO) {
@@ -75,13 +87,10 @@ class ScoreRepository(private val context: Context) {
         val displayName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             cursor.takeIf { it.moveToFirst() }?.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
         } ?: "未命名琴谱"
-        val extension = displayName.substringAfterLast('.', missingDelimiterValue = extensionFor(mimeType))
+        val extension = extensionFor(mimeType)
         scoreDirectory.mkdirs()
         val id = UUID.randomUUID().toString()
         val destination = File(scoreDirectory, "$id.$extension")
-
-        resolver.openInputStream(uri)?.use { input -> destination.outputStream().use(input::copyTo) }
-            ?: error("无法读取所选文件")
 
         val score = Score(
             id = id,
@@ -91,9 +100,21 @@ class ScoreRepository(private val context: Context) {
             mimeType = mimeType,
             importedAt = System.currentTimeMillis(),
         )
-        database.scoreDao().upsert(score)
-        database.scorePageDao().insertAll(List(if (mimeType == "application/pdf") pdfPageCount(destination) else 1) { index -> ScorePage(score.id, index, index) })
-        score
+        try {
+            resolver.openInputStream(uri)?.use { input -> destination.outputStream().use(input::copyTo) }
+                ?: error("无法读取所选文件")
+            val pages = List(if (mimeType == "application/pdf") pdfPageCount(destination) else 1) { index ->
+                ScorePage(score.id, index, index)
+            }
+            database.withTransaction {
+                database.scoreDao().upsert(score)
+                database.scorePageDao().insertAll(pages)
+            }
+            score
+        } catch (error: Throwable) {
+            destination.delete()
+            throw error
+        }
     }
 
     suspend fun moveToFolder(scoreId: String, folderId: String?) = database.scoreDao().setFolder(scoreId, folderId)
@@ -135,14 +156,17 @@ class ScoreRepository(private val context: Context) {
 
     suspend fun delete(score: Score) = withContext(Dispatchers.IO) {
         val pages = database.scorePageDao().observe(score.id).first()
+        val pageFiles = pages.mapNotNull { page -> page.relativePath?.let { resolveRepositoryPath(context.filesDir, it) } }
+        val scoreFile = score.relativePath.takeIf(String::isNotBlank)?.let { resolveRepositoryPath(context.filesDir, it) }
+        val scoreGroupDirectory = resolveRepositoryPath(context.filesDir, "scores/${score.id}")
         database.withTransaction {
             database.bookmarkDao().deleteForScore(score.id)
             database.scorePageDao().deleteForScore(score.id)
             database.scoreDao().delete(score.id)
         }
-        pages.forEach { page -> page.relativePath?.let { File(context.filesDir, it).delete() } }
-        if (score.relativePath.isNotBlank()) File(context.filesDir, score.relativePath).delete()
-        File(context.filesDir, "scores/${score.id}").delete()
+        pageFiles.forEach(File::delete)
+        scoreFile?.delete()
+        scoreGroupDirectory.deleteRecursively()
     }
 
     suspend fun markOpened(score: Score) = database.scoreDao().markOpened(score.id, System.currentTimeMillis())
@@ -178,11 +202,11 @@ class ScoreRepository(private val context: Context) {
         val changes = mutableListOf<BackupFileChange>()
         try {
             staged.dataPaths.forEach { relativePath ->
-                val source = resolveInside(staged.directory, relativePath)
-                val target = resolveInside(context.filesDir, relativePath)
+                val source = resolveRepositoryPath(staged.directory, relativePath)
+                val target = resolveRepositoryPath(context.filesDir, relativePath)
                 target.parentFile?.mkdirs()
                 val rollback = if (target.exists()) {
-                    resolveInside(rollbackRoot, relativePath).also { backup ->
+                    resolveRepositoryPath(rollbackRoot, relativePath).also { backup ->
                         backup.parentFile?.mkdirs()
                         target.inputStream().buffered().use { input ->
                             FileOutputStream(backup).buffered().use { input.copyTo(it) }
@@ -219,13 +243,14 @@ class ScoreRepository(private val context: Context) {
         }
     }
 
-    private fun resolveInside(root: File, relativePath: String): File {
-        require(relativePath.isNotBlank() && !File(relativePath).isAbsolute) { "恢复文件路径无效" }
-        val canonicalRoot = root.canonicalFile
-        val resolved = File(canonicalRoot, relativePath).canonicalFile
-        require(resolved.path.startsWith(canonicalRoot.path + File.separator)) { "恢复文件路径越界" }
-        return resolved
-    }
+}
+
+internal fun resolveRepositoryPath(root: File, relativePath: String): File {
+    require(relativePath.isNotBlank() && !File(relativePath).isAbsolute) { "文件路径无效" }
+    val canonicalRoot = root.canonicalFile
+    val resolved = File(canonicalRoot, relativePath).canonicalFile
+    require(resolved.path.startsWith(canonicalRoot.path + File.separator)) { "文件路径越界" }
+    return resolved
 }
 
 private data class BackupFileChange(val target: File, val rollback: File?)

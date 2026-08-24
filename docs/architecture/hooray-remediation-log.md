@@ -76,6 +76,12 @@
 - 测试：新增双 voice MusicXML 用例，将第一音从四分音符改为二分音符，验证同 voice 后一音后移、另一 voice onset 不变、`backup` 从 2 调整为 3 且结果通过 ScoreIR 校验；Android 全量 JVM 测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### 导入孤儿文件与删除路径未校验
+
+- 修复：单文件和图片组导入把曲谱/页面写入同一 Room 事务，复制、PDF 分页或 DB 失败时删除本次 UUID 文件；扩展名只由受信 MIME 映射。删除前验证曲谱、页面和分组目录的 canonical 路径均位于 `filesDir`，再删 DB 与文件；备份安装也复用同一解析器。
+- 测试：新增 `ScoreRepositoryPathTest`，覆盖合法嵌套路径、`..` 越界和绝对路径拒绝；Android 全量 JVM 测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### AI provider SSRF 与密钥重定向
 
 - 修复：模型端点启动校验会解析全部地址并拒绝非公网 IP；仅显式开发模式允许 HTTP loopback。provider 请求使用禁止重定向的 opener，授权头不会跟随 30x 发往其他目标。

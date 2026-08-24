@@ -303,6 +303,31 @@ class MusicXmlScoreParserTest {
     }
 
     @Test
+    fun malformedPitchesUseOneParseErrorBoundary() {
+        listOf(
+            "<step>C</step><alter>not-a-number</alter><octave>4</octave>",
+            "<step>C</step><alter>3</alter><octave>4</octave>",
+            "<step>C</step><octave>10</octave>",
+            "<step>CC</step><octave>4</octave>",
+        ).forEach { pitch ->
+            val source = """
+                <score-partwise>
+                  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+                  <part id="P1"><measure number="1">
+                    <attributes><divisions>1</divisions><time><beats>1</beats><beat-type>4</beat-type></time></attributes>
+                    <note><pitch>$pitch</pitch><duration>1</duration></note>
+                  </measure></part>
+                </score-partwise>
+            """.trimIndent()
+
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                MusicXmlScoreParser.parse(source)
+            }
+            assertTrue(error.message.orEmpty().startsWith("无法解析 MusicXML 音高："))
+        }
+    }
+
+    @Test
     fun transposeRejectsOutOfRangePitchInsteadOfClamping() {
         assertThrows(IllegalArgumentException::class.java) {
             ScorePitch('G', 0, 9).transpose(1, preferSharps = true)

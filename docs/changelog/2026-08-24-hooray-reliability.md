@@ -93,3 +93,7 @@
 
 - `ScorePitch.transpose` 不再把越界结果静默夹到边界音；超出 MusicXML 可表示范围或 MIDI 127 时明确拒绝本次编辑，避免最高音被悄悄改成错误音高。
 - 移调加法使用 Long 中间值，极端半音参数不会先发生 Int 溢出。
+
+## MusicXML 音高错误
+
+- 非数字或超范围的 `step`、`alter`、`octave` 统一报告“无法解析 MusicXML 音高”，不再泄漏底层 `ScorePitch` 构造异常；非法 `alter` 也不会静默退回自然音。

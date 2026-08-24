@@ -130,6 +130,12 @@
 - 测试：新增最高音上移、最低可表示音下移和 `Int.MAX_VALUE` 半音三类拒绝用例；Android JVM 全量测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### `toPitch` 越界抛裸异常
+
+- 修复：音高元素逐项严格解析；存在但非整数的 `alter` 不再回退为 0，缺失/非法 step、octave 与 `ScorePitch` 范围错误统一包裹为“无法解析 MusicXML 音高”。
+- 测试：新增非法 alter 文本、alter=3、octave=10 与多字符 step 四类用例，全部核对统一错误边界；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### Room v1-v6 升级缺少 `lastOpenedAt`
 
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。

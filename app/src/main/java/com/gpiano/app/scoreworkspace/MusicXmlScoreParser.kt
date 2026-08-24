@@ -153,11 +153,17 @@ object MusicXmlScoreParser {
     internal fun eventId(partIndex: Int, measureIndex: Int, noteIndex: Int): String =
         "part:${partIndex + 1}/measure:$measureIndex/note:$noteIndex"
 
-    private fun Element.toPitch(): ScorePitch? {
-        val step = firstDirectChild("step")?.textContent?.trim()?.firstOrNull() ?: return null
-        val alter = firstDirectChild("alter")?.intTextOrNull() ?: 0
-        val octave = firstDirectChild("octave")?.intTextOrNull() ?: return null
-        return ScorePitch(step.uppercaseChar(), alter, octave)
+    private fun Element.toPitch(): ScorePitch = try {
+        val stepText = firstDirectChild("step")?.textContent?.trim().orEmpty()
+        require(stepText.length == 1) { "step 缺失或无效" }
+        val alterElement = firstDirectChild("alter")
+        val alter = alterElement?.textContent?.trim()?.toIntOrNull()
+            ?: if (alterElement == null) 0 else throw IllegalArgumentException("alter 不是整数")
+        val octave = firstDirectChild("octave")?.textContent?.trim()?.toIntOrNull()
+            ?: throw IllegalArgumentException("octave 缺失或不是整数")
+        ScorePitch(stepText.single().uppercaseChar(), alter, octave)
+    } catch (error: IllegalArgumentException) {
+        throw IllegalArgumentException("无法解析 MusicXML 音高：${error.message}", error)
     }
 
     private fun resolveHand(partCount: Int, partIndex: Int, staff: Int?): ScoreHand = when {

@@ -100,6 +100,12 @@
 - 测试：`python -m unittest discover -s omr-service -p 'test_*.py'` 10 项通过，覆盖活动任务容量、终态 TTL、运行任务保留和残缺目录清理。
 - 提交：见包含本节的独立提交。
 
+### MIDI 接收线程读取非同步状态
+
+- 修复：`MidiPracticeController.state` 声明为 JVM volatile；主线程发布录制状态后，MIDI 接收线程读取 `connection` 时具有明确的 happens-before 可见性。
+- 测试：新增 `MidiPracticeControllerVisibilityTest`，通过字段修饰符回归检查锁定跨线程可见性契约；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### Room v1-v6 升级缺少 `lastOpenedAt`
 
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。

@@ -47,6 +47,7 @@ class MidiPracticeController(context: Context) : Closeable {
     private var recordingOriginNanos: Long? = null
     private var device: MidiDevice? = null
     private var outputPort: MidiOutputPort? = null
+    @Volatile
     private var state = MidiCaptureUiState()
     private var closed = false
 

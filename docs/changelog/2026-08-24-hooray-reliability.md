@@ -83,3 +83,8 @@
 
 - AI/OMR 客户端把超限 JSON 响应归类为稳定的 `response_too_large`，不再混同为 JSON 解析失败或普通 HTTP 状态；超限 MusicXML 使用 `result_too_large`。
 - OMR 诊断 JSON 在进入持久化模型前截断到 4 KiB，避免远端自由文本无界进入本地数据库。
+
+## MusicXML 安全解析
+
+- DOM 解析强制启用 secure processing，并禁止外部 DTD/schema 访问；实体解析器继续在平台 feature 不完整时提供无网络、无文件访问的兜底。
+- 保留常见 MusicXML 外部 DOCTYPE 兼容性，但在构造解析器前拒绝实体声明和内联 DTD，阻断 XXE 与实体展开载荷。

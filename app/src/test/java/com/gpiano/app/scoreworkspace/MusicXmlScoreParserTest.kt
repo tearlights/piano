@@ -8,6 +8,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.nio.file.Files
 
 class MusicXmlScoreParserTest {
     private lateinit var xml: String
@@ -70,6 +71,42 @@ class MusicXmlScoreParserTest {
 
         assertEquals(ScoreHand.Right, score.parts[0].measures.single().events.single().hand)
         assertEquals(ScoreHand.Left, score.parts[1].measures.single().events.single().hand)
+    }
+
+    @Test
+    fun rejectsInternalEntityDeclarationsBeforeParsing() {
+        val source = """
+            <!DOCTYPE score-partwise [<!ENTITY secret SYSTEM "file:///private.txt">]>
+            <score-partwise><part-list/></score-partwise>
+        """.trimIndent()
+
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            MusicXmlScoreParser.parse(source)
+        }
+
+        assertTrue(error.message.orEmpty().contains("实体声明"))
+    }
+
+    @Test
+    fun externalDoctypeIsNeverFetched() {
+        val malformedDtd = Files.createTempFile("gpiano-xml-", ".dtd")
+        Files.write(malformedDtd, "this is not a valid DTD".toByteArray())
+        try {
+            val source = """
+                <!DOCTYPE score-partwise SYSTEM "${malformedDtd.toUri()}">
+                <score-partwise>
+                  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+                  <part id="P1"><measure number="1">
+                    <attributes><divisions>1</divisions><time><beats>1</beats><beat-type>4</beat-type></time></attributes>
+                    <note><rest/><duration>1</duration></note>
+                  </measure></part>
+                </score-partwise>
+            """.trimIndent()
+
+            assertEquals(1, MusicXmlScoreParser.parse(source).events.size)
+        } finally {
+            Files.deleteIfExists(malformedDtd)
+        }
     }
 
     @Test

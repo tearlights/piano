@@ -118,6 +118,12 @@
 - 测试：新增 `PracticeAiClientResponseTest` 与 `OmrClientResponseTest`，覆盖成功/错误响应超限的稳定分类及诊断截断；Android JVM 全量测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### MusicXML 安全 feature 被静默忽略
+
+- 修复：解析器强制启用 JAXP secure processing，并尝试关闭所有外部 DTD/schema 协议；已有空实体解析器继续作为平台兼容兜底。为兼容常见 MusicXML 外部 DOCTYPE，不一刀切拒绝 DOCTYPE，但在进入 DOM 前明确拒绝任何 `ENTITY` 声明和内联 DTD 子集。
+- 测试：`MusicXmlScoreParserTest` 新增内部外部实体载荷拒绝，以及指向本地恶意 DTD 仍不读取且可安全解析的用例；真实带 MusicXML 4.0 DOCTYPE 的 24 小节谱继续通过。Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### Room v1-v6 升级缺少 `lastOpenedAt`
 
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。

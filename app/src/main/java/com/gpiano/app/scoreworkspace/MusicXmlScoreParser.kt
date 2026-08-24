@@ -1,6 +1,7 @@
 package com.gpiano.app.scoreworkspace
 
 import java.io.StringReader
+import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilder
 import javax.xml.parsers.DocumentBuilderFactory
 import org.w3c.dom.Document
@@ -13,6 +14,7 @@ object MusicXmlScoreParser {
 
     internal fun parseDocument(xml: String): Document {
         require(xml.isNotBlank()) { "MusicXML 内容为空" }
+        rejectUnsafeDeclarations(xml)
         return newDocumentBuilder().parse(InputSource(StringReader(xml)))
     }
 
@@ -171,9 +173,12 @@ object MusicXmlScoreParser {
             isNamespaceAware = false
             runCatching { isXIncludeAware = false }
             runCatching { isExpandEntityReferences = false }
+            setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
             setFeatureSafely("http://xml.org/sax/features/external-general-entities", false)
             setFeatureSafely("http://xml.org/sax/features/external-parameter-entities", false)
             setFeatureSafely("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+            runCatching { setAttribute(ACCESS_EXTERNAL_DTD, "") }
+            runCatching { setAttribute(ACCESS_EXTERNAL_SCHEMA, "") }
         }
         return factory.newDocumentBuilder().apply {
             setEntityResolver { _, _ -> InputSource(StringReader("")) }
@@ -183,6 +188,16 @@ object MusicXmlScoreParser {
     private fun DocumentBuilderFactory.setFeatureSafely(name: String, value: Boolean) {
         runCatching { setFeature(name, value) }
     }
+
+    private fun rejectUnsafeDeclarations(xml: String) {
+        require(!UNSAFE_ENTITY.containsMatchIn(xml)) { "MusicXML 不允许实体声明" }
+        require(!DOCTYPE_INTERNAL_SUBSET.containsMatchIn(xml)) { "MusicXML 不允许内联 DTD" }
+    }
+
+    private val UNSAFE_ENTITY = Regex("<!\\s*ENTITY\\b", RegexOption.IGNORE_CASE)
+    private val DOCTYPE_INTERNAL_SUBSET = Regex("<!\\s*DOCTYPE[^>]*\\[", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+    private const val ACCESS_EXTERNAL_DTD = "http://javax.xml.XMLConstants/property/accessExternalDTD"
+    private const val ACCESS_EXTERNAL_SCHEMA = "http://javax.xml.XMLConstants/property/accessExternalSchema"
 }
 
 internal fun Element.directChildren(tagName: String? = null): List<Element> = buildList {

@@ -50,6 +50,8 @@ adb reverse tcp:8765 tcp:8765
 
 服务启动及每次创建任务前都会清理超过 TTL 的 `ready`、`failed` 和残缺任务目录；`queued`、`running` 任务不会按 TTL 清除。清理后仍达到总数上限时，新建任务返回 `503 job_capacity_reached`。
 
+Audiveris 产出的 MXL 只读取声明的安全相对 rootfile；`META-INF/container.xml` 解压上限为 64 KiB，MusicXML 解压上限为 20 MiB，超限归档不会进入 XML 解析。
+
 运行服务测试：
 
 ```bash

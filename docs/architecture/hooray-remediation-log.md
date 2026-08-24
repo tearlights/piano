@@ -154,6 +154,12 @@
 - 测试：`MidiMessageParserTest` 新增跨分片 SysEx 伪 note-on、截断后 reset，以及插入 timing clock 的 running-status 分片三类用例；Android JVM 全量测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### `extract_mxl` 无界读取 container.xml
+
+- 修复：读取 `META-INF/container.xml` 前先检查 ZipInfo 解压大小，超过 64 KiB 立即拒绝；rootfile 继续要求安全相对路径并限制 MusicXML 为 20 MiB。
+- 测试：OMR 服务新增高压缩比、解压后 64 KiB+1 的 container 用例，确认在 XML 解析前返回大小错误；`python -m unittest discover -s omr-service -p 'test_*.py'` 11 项通过。
+- 提交：见包含本节的独立提交。
+
 ### Room v1-v6 升级缺少 `lastOpenedAt`
 
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。

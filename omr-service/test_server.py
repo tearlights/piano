@@ -103,6 +103,15 @@ class OmrServiceTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 extract_mxl(archive_path)
 
+    def test_rejects_oversized_mxl_container_before_decompression(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "oversized-container.mxl"
+            with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("META-INF/container.xml", b" " * (64 * 1024 + 1))
+                archive.writestr("score.xml", MUSIC_XML)
+            with self.assertRaisesRegex(ValueError, "container.xml is too large"):
+                extract_mxl(archive_path)
+
     def test_filename_is_not_a_path_or_header(self):
         self.assertEqual("score.png", safe_display_name("../../score.png\r\nSecret: yes"))
 

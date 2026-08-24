@@ -28,6 +28,7 @@ from xml.etree import ElementTree
 
 MAX_INPUT_BYTES = 25 * 1024 * 1024
 MAX_MUSIC_XML_BYTES = 20 * 1024 * 1024
+MAX_MXL_CONTAINER_BYTES = 64 * 1024
 JOB_ID = re.compile(r"^[0-9a-f-]{36}$")
 SUPPORTED_TYPES = {
     "image/png": ".png",
@@ -462,7 +463,10 @@ def find_music_xml(output_dir: Path) -> bytes:
 
 def extract_mxl(path: Path) -> bytes:
     with zipfile.ZipFile(path) as archive:
-        container = ElementTree.fromstring(archive.read("META-INF/container.xml"))
+        container_info = archive.getinfo("META-INF/container.xml")
+        if container_info.file_size > MAX_MXL_CONTAINER_BYTES:
+            raise ValueError("MXL container.xml is too large")
+        container = ElementTree.fromstring(archive.read(container_info))
         root_file = next(
             (node.attrib.get("full-path") for node in container.iter() if node.tag.rsplit("}", 1)[-1] == "rootfile"),
             None,

@@ -110,3 +110,7 @@
 
 - 实时 MIDI 解析器显式跟踪 SysEx 起止；SysEx 载荷中的 channel status 字节不会再被解释为 note-on。未闭合 SysEx 持续隔离到 `F7` 或显式 reset，以安全处理截断输入。
 - MIDI real-time 字节继续可插入分片 channel message，且不破坏 running status。
+
+## OMR MXL 解包边界
+
+- MXL 的 `META-INF/container.xml` 在解压前检查声明大小并限制为 64 KiB；结合既有的安全相对 rootfile 与 20 MiB MusicXML 上限，阻断小压缩包触发无界 container 分配。

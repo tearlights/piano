@@ -74,6 +74,24 @@ class MusicXmlScoreParserTest {
     }
 
     @Test
+    fun singlePartWithoutStaffDefaultsToRightHandPlayback() {
+        val source = """
+            <score-partwise>
+              <part-list><score-part id="P1"><part-name>Melody</part-name></score-part></part-list>
+              <part id="P1"><measure number="1">
+                <attributes><divisions>1</divisions><time><beats>1</beats><beat-type>4</beat-type></time></attributes>
+                <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note>
+              </measure></part>
+            </score-partwise>
+        """.trimIndent()
+        val score = MusicXmlScoreParser.parse(source)
+
+        assertEquals(ScoreHand.Right, score.events.single().hand)
+        assertEquals(1, PlaybackPlanCompiler.compile(score, PlaybackSelection(1, 1, hand = PlaybackHand.Right)).events.size)
+        assertTrue(PlaybackPlanCompiler.compile(score, PlaybackSelection(1, 1, hand = PlaybackHand.Left)).events.isEmpty())
+    }
+
+    @Test
     fun rejectsInternalEntityDeclarationsBeforeParsing() {
         val source = """
             <!DOCTYPE score-partwise [<!ENTITY secret SYSTEM "file:///private.txt">]>

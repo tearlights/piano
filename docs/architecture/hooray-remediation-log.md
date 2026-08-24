@@ -177,3 +177,9 @@
 - 修复：双 part 乐谱优先按 part 索引判定左右手，`staff` 只用于单 part 的 grand staff；避免左手 part 内部同样从 staff 1 编号时被误判。
 - 测试：新增带两个 part、且两边均声明 `staff=1` 的 MusicXML 回归用例；`MusicXmlScoreParserTest` 与 Android JVM 全量测试通过。
 - 提交：本项提交完成后回填 SHA。
+
+### 单 part 无 staff 乐谱分手播放静音
+
+- 修复：单 part 事件在没有 staff 1/2 信息时默认归为右手；staff 信息仍优先，因此单 part grand staff 不受影响，多 part 的未知映射也不会被擅自猜测。
+- 测试：`MusicXmlScoreParserTest` 新增无 staff 单旋律谱，核对事件为 Right、右手计划含音符且左手计划为空；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。

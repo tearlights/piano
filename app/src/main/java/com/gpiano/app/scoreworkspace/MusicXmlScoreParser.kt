@@ -171,6 +171,7 @@ object MusicXmlScoreParser {
         partCount == 2 && partIndex == 1 -> ScoreHand.Left
         staff == 1 -> ScoreHand.Right
         staff == 2 -> ScoreHand.Left
+        partCount == 1 -> ScoreHand.Right
         else -> ScoreHand.Unknown
     }
 

@@ -6,7 +6,15 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from server import BoundedThreadingHTTPServer, JobStore, extract_mxl, find_music_xml, safe_display_name, tokens_equal
+from server import (
+    BoundedThreadingHTTPServer,
+    JobCapacityError,
+    JobStore,
+    extract_mxl,
+    find_music_xml,
+    safe_display_name,
+    tokens_equal,
+)
 
 
 MUSIC_XML = b'<?xml version="1.0"?><score-partwise version="4.0"><part-list/></score-partwise>'
@@ -41,6 +49,35 @@ class OmrServiceTest(unittest.TestCase):
             updated = store.transition(created["jobId"], status="running", stage="audiveris")
             self.assertEqual("score.png", updated["originalName"])
             self.assertEqual("running", JobStore(Path(directory)).load(created["jobId"])["status"])
+
+    def test_job_store_enforces_capacity_for_active_jobs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = JobStore(Path(directory), max_jobs=1, ttl_seconds=60)
+            store.create("image/png", "first.png", b"png")
+            with self.assertRaises(JobCapacityError):
+                store.create("image/png", "second.png", b"png")
+
+    def test_cleanup_removes_expired_terminal_jobs_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = JobStore(Path(directory), max_jobs=10, ttl_seconds=60)
+            ready = store.create("image/png", "ready.png", b"png")
+            running = store.create("image/png", "running.png", b"png")
+            ready = store.transition(ready["jobId"], status="ready", stage="ready")
+            running = store.transition(running["jobId"], status="running", stage="audiveris")
+            removed = store.cleanup(now_ms=max(ready["updatedAt"], running["updatedAt"]) + 60_000)
+            self.assertEqual(1, removed)
+            self.assertIsNone(store.load(ready["jobId"]))
+            self.assertEqual("running", store.load(running["jobId"])["status"])
+
+    def test_cleanup_removes_expired_incomplete_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JobStore(root, max_jobs=10, ttl_seconds=60)
+            incomplete = root / "incomplete"
+            incomplete.mkdir()
+            now_ms = int(incomplete.stat().st_mtime * 1000) + 60_000
+            self.assertEqual(1, store.cleanup(now_ms=now_ms))
+            self.assertFalse(incomplete.exists())
 
     def test_extracts_declared_musicxml_from_mxl(self):
         with tempfile.TemporaryDirectory() as directory:

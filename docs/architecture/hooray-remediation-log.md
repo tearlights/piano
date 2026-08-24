@@ -94,6 +94,12 @@
 - 测试：`python -m unittest discover -s practice-ai-service -p 'test_*.py'` 9 项通过；`python -m unittest discover -s omr-service -p 'test_*.py'` 7 项通过。新增用例核对 accepted socket 超时及超出 worker 上限时不再派生线程。
 - 提交：见包含本节的独立提交。
 
+### OMR 任务目录无上限且没有 TTL
+
+- 修复：`JobStore` 在同一锁内先清理再检查任务目录总数，容量检查与目录创建不可竞态穿透。启动和每次提交前清理超过 TTL 的 `ready`、`failed` 任务，以及没有有效元数据的残缺目录；`queued`、`running` 始终保留。写入失败会删除刚创建的目录，容量耗尽返回稳定错误码。
+- 测试：`python -m unittest discover -s omr-service -p 'test_*.py'` 10 项通过，覆盖活动任务容量、终态 TTL、运行任务保留和残缺目录清理。
+- 提交：见包含本节的独立提交。
+
 ### Room v1-v6 升级缺少 `lastOpenedAt`
 
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。

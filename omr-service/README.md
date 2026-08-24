@@ -45,6 +45,10 @@ adb reverse tcp:8765 tcp:8765
 | `GPIANO_OMR_TIMEOUT` | `900` | 单任务超时秒数 |
 | `GPIANO_OMR_SOCKET_TIMEOUT` | `15` | 单个 HTTP 连接读写超时秒数 |
 | `GPIANO_OMR_HTTP_WORKERS` | `16` | 同时处理的 HTTP 连接上限；与 Audiveris 进程数独立 |
+| `GPIANO_OMR_MAX_JOBS` | `500` | 磁盘中允许保留的任务目录总数 |
+| `GPIANO_OMR_JOB_TTL` | `604800` | 成功、失败或残缺任务的保留秒数，最小 60 秒 |
+
+服务启动及每次创建任务前都会清理超过 TTL 的 `ready`、`failed` 和残缺任务目录；`queued`、`running` 任务不会按 TTL 清除。清理后仍达到总数上限时，新建任务返回 `503 job_capacity_reached`。
 
 运行服务测试：
 

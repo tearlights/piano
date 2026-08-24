@@ -177,10 +177,14 @@ class PracticeAiClient {
         }
     }
 
-    private fun readJson(connection: HttpURLConnection): JSONObject {
+    internal fun readJson(connection: HttpURLConnection): JSONObject {
         val status = connection.responseCode
         val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-        val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readTextLimited(MAX_RESPONSE_CHARS) }.orEmpty()
+        val body = try {
+            stream?.bufferedReader(Charsets.UTF_8)?.use { it.readTextLimited(MAX_RESPONSE_CHARS) }.orEmpty()
+        } catch (_: ResponseTooLargeException) {
+            throw PracticeAiServiceException("AI 服务响应过大", "response_too_large")
+        }
         if (status !in 200..299) {
             val error = runCatching { JSONObject(body) }.getOrNull()
             throw PracticeAiServiceException(
@@ -230,13 +234,15 @@ class PracticeAiClient {
     }
 }
 
+private class ResponseTooLargeException : Exception()
+
 private fun java.io.Reader.readTextLimited(limit: Int): String {
     val output = StringBuilder()
     val buffer = CharArray(2_048)
     while (true) {
         val read = read(buffer)
         if (read < 0) break
-        require(output.length + read <= limit) { "AI 服务响应过大" }
+        if (output.length + read > limit) throw ResponseTooLargeException()
         output.append(buffer, 0, read)
     }
     return output.toString()

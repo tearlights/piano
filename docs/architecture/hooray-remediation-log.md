@@ -112,6 +112,12 @@
 - 测试：新增 `LibraryImportGateTest`，8 线程同时竞争只允许一次进入，并验证释放后可再次导入；Android JVM 全量测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### 服务响应超限错误分类与诊断边界
+
+- 修复：AI/OMR 有界读取器改用专用超限异常，并在客户端边界转换成 `response_too_large`；MusicXML 超限转换成 `result_too_large`。OMR 错误响应超限不会再被吞掉并退化成 `http_状态码`。任务诊断 JSON 在构造持久化模型前限制为 4 KiB。
+- 测试：新增 `PracticeAiClientResponseTest` 与 `OmrClientResponseTest`，覆盖成功/错误响应超限的稳定分类及诊断截断；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### Room v1-v6 升级缺少 `lastOpenedAt`
 
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。

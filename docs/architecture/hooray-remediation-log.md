@@ -31,3 +31,9 @@
 - 修复：模型端点启动校验会解析全部地址并拒绝非公网 IP；仅显式开发模式允许 HTTP loopback。provider 请求使用禁止重定向的 opener，授权头不会跟随 30x 发往其他目标。
 - 测试：`python -m unittest discover -s practice-ai-service -p 'test_*.py'`，7 项通过，覆盖私网地址、开发 loopback 和禁重定向。
 - 提交：本项提交完成后回填 SHA。
+
+### Room v1-v6 升级缺少 `lastOpenedAt`
+
+- 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。
+- 测试：新增 `GpianoDatabaseMigrationTest` 直接执行迁移并核对 DDL；Android JVM 全量测试与 Debug 构建通过。
+- 提交：本项提交完成后回填 SHA。

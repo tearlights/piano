@@ -12,3 +12,7 @@
 
 - 模型 provider 地址只允许解析到公网的 HTTPS 端点；HTTP loopback 仅能在显式开发开关下使用。
 - 禁止 provider HTTP 重定向，避免跨主机重定向携带模型 API 密钥，并消除重定向后的内网 SSRF 路径。
+
+## 本地数据库升级
+
+- 修复 v1-v6 存量数据库升级时缺少 `scores.lastOpenedAt`、进入曲谱库后查询崩溃的问题。

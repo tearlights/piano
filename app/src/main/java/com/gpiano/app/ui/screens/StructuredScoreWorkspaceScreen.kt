@@ -45,6 +45,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -66,6 +67,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.gpiano.app.data.PracticeVersion
 import com.gpiano.app.data.PracticeVersionRevision
 import com.gpiano.app.data.PracticeVersionStatus
+import com.gpiano.app.data.ScoreStructure
 import com.gpiano.app.scoreworkspace.CorrectionOperation
 import com.gpiano.app.scoreworkspace.MusicXmlSummary
 import com.gpiano.app.scoreworkspace.MusicalDuration
@@ -111,13 +113,24 @@ private sealed interface ScoreRenderState {
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalContracts::class, ExperimentalUnsignedTypes::class)
-fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: String?) {
+fun StructuredScoreWorkspaceScreen(
+    contentPadding: PaddingValues,
+    structureId: String?,
+    autoRestoreEnabled: Boolean,
+    onSelectStructure: (String) -> Unit,
+    onChooseAnotherScore: () -> Unit,
+    onOpenLibrary: () -> Unit,
+    onAutoRestoreChange: (Boolean) -> Unit,
+) {
     val context = LocalContext.current.applicationContext
     val repository = remember { StructuredScoreRepository(context) }
     val practiceVersionRepository = remember { PracticeVersionRepository(context) }
     val playbackController = remember { AlphaTabPlaybackController() }
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<WorkspaceLoadState>(WorkspaceLoadState.Loading) }
+    var availableStructures by remember { mutableStateOf<List<ScoreStructure>>(emptyList()) }
+    var structureListLoading by remember { mutableStateOf(false) }
+    var structureListError by remember { mutableStateOf<String?>(null) }
     var selectedMeasure by remember { mutableIntStateOf(1) }
     var correctionVisible by remember { mutableStateOf(false) }
     var historyVisible by remember { mutableStateOf(false) }
@@ -306,13 +319,25 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
 
     LaunchedEffect(structureId, repository) {
         if (structureId == null) {
-            state = WorkspaceLoadState.Failed("请先在曲谱库选择一张单页图片并转换为练习谱")
+            playbackController.stop()
+            structureListLoading = true
+            structureListError = null
+            availableStructures = runCatching { repository.listStructures() }
+                .onFailure { structureListError = it.message ?: "无法读取练习谱列表" }
+                .getOrDefault(emptyList())
+            structureListLoading = false
             return@LaunchedEffect
         }
         state = WorkspaceLoadState.Loading
         state = runCatching { repository.open(structureId) }
             .fold(
-                onSuccess = { WorkspaceLoadState.Ready(it) },
+                onSuccess = {
+                    selectedMeasure = 1
+                    playbackEndMeasure = 1
+                    activePracticeVersion = null
+                    showSource = false
+                    WorkspaceLoadState.Ready(it)
+                },
                 onFailure = { WorkspaceLoadState.Failed(it.message ?: "无法读取结构化乐谱") },
             )
     }
@@ -329,7 +354,17 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
             .padding(contentPadding)
             .background(MaterialTheme.colorScheme.background),
     ) {
-        when (val currentState = state) {
+        if (structureId == null) {
+            WorkspaceScorePicker(
+                structures = availableStructures,
+                loading = structureListLoading,
+                error = structureListError,
+                autoRestoreEnabled = autoRestoreEnabled,
+                onSelectStructure = onSelectStructure,
+                onOpenLibrary = onOpenLibrary,
+                onAutoRestoreChange = onAutoRestoreChange,
+            )
+        } else when (val currentState = state) {
             WorkspaceLoadState.Loading -> LoadingWorkspace()
             is WorkspaceLoadState.Failed -> FailedWorkspace(currentState.message)
             is WorkspaceLoadState.Ready -> {
@@ -351,6 +386,16 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                         midiPracticeVisible = false
                         aiVisible = false
                         showSource = !showSource
+                    },
+                    onChooseAnotherScore = {
+                        playbackController.stop()
+                        correctionVisible = false
+                        playbackSettingsVisible = false
+                        guidanceVisible = false
+                        practiceVersionsVisible = false
+                        midiPracticeVisible = false
+                        aiVisible = false
+                        onChooseAnotherScore()
                     },
                     onSelectMeasure = {
                         if (playerState.phase == ScorePlayerPhase.Playing || playerState.phase == ScorePlayerPhase.Paused) {
@@ -479,7 +524,10 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                 speed = playbackSpeed,
                 hand = playbackHand,
                 looping = playbackLooping,
-                onEndMeasureChange = { playbackEndMeasure = it },
+                onRangeChange = { start, end ->
+                    selectedMeasure = start.coerceIn(1, (displayedScore ?: ready.session.score).measureCount)
+                    playbackEndMeasure = end.coerceIn(selectedMeasure, (displayedScore ?: ready.session.score).measureCount)
+                },
                 onSpeedChange = { playbackSpeed = it },
                 onHandChange = { playbackHand = it },
                 onLoopingChange = { playbackLooping = it },
@@ -783,6 +831,90 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
 }
 
 @Composable
+private fun WorkspaceScorePicker(
+    structures: List<ScoreStructure>,
+    loading: Boolean,
+    error: String?,
+    autoRestoreEnabled: Boolean,
+    onSelectStructure: (String) -> Unit,
+    onOpenLibrary: () -> Unit,
+    onAutoRestoreChange: (Boolean) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp)) {
+        Text("选择练习谱", style = MaterialTheme.typography.headlineSmall)
+        Text(
+            "先选择要练习的谱面。最近练习排在最前，进入后也可随时换谱。",
+            modifier = Modifier.padding(top = 6.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("自动恢复上次练习", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    if (autoRestoreEnabled) "下次点开练习工作区时直接恢复最近一谱" else "当前默认：每次先选谱",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = autoRestoreEnabled, onCheckedChange = onAutoRestoreChange)
+        }
+        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+        when {
+            loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            error != null -> Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+            ) {
+                Text(error, modifier = Modifier.padding(16.dp))
+            }
+            structures.isEmpty() -> Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text("还没有可练习的结构化琴谱", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "请先从曲谱库导入图片或 PDF，并完成识谱转换。",
+                    modifier = Modifier.padding(top = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(onClick = onOpenLibrary, modifier = Modifier.padding(top = 16.dp)) { Text("前往曲谱库") }
+            }
+            else -> LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(structures, key = ScoreStructure::id) { structure ->
+                    Card(onClick = { onSelectStructure(structure.id) }, modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(structure.title, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    if (structure == structures.first()) "最近练习" else "结构化练习谱",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Text("打开", color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+                item { Button(onClick = onOpenLibrary, modifier = Modifier.fillMaxWidth()) { Text("从曲谱库添加练习谱") } }
+            }
+        }
+    }
+}
+
+@Composable
 private fun LoadingWorkspace() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -822,6 +954,7 @@ private fun WorkspaceContent(
     playbackController: AlphaTabPlaybackController,
     showSource: Boolean,
     onToggleSource: () -> Unit,
+    onChooseAnotherScore: () -> Unit,
     onSelectMeasure: (Int) -> Unit,
     onOpenPlaybackSettings: () -> Unit,
     onTogglePlayback: () -> Unit,
@@ -850,6 +983,7 @@ private fun WorkspaceContent(
             hasSource = session.sourcePage != null,
             showSource = showSource,
             onToggleSource = onToggleSource,
+            onChooseAnotherScore = onChooseAnotherScore,
             onOpenHistory = onOpenHistory,
         )
         MeasureSelector(
@@ -909,6 +1043,7 @@ private fun ScoreMetadata(
     hasSource: Boolean,
     showSource: Boolean,
     onToggleSource: () -> Unit,
+    onChooseAnotherScore: () -> Unit,
     onOpenHistory: () -> Unit,
 ) {
     Row(
@@ -935,6 +1070,7 @@ private fun ScoreMetadata(
             if (hasSource) {
                 TextButton(onClick = onToggleSource) { Text(if (showSource) "练习谱" else "原谱") }
             }
+            TextButton(onClick = onChooseAnotherScore) { Text("换谱") }
         }
     }
 }
@@ -958,14 +1094,13 @@ private fun MeasureSelector(
     playbackMeasure: Int?,
     onSelectMeasure: (Int) -> Unit,
 ) {
-    Row(
+    LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        (1..measureCount).forEach { measure ->
+        items((1..measureCount).toList(), key = { it }) { measure ->
             AssistChip(
                 onClick = { onSelectMeasure(measure) },
                 label = { Text("第 $measure 小节") },
@@ -1370,7 +1505,7 @@ private fun PlaybackSettingsSheet(
     speed: Double,
     hand: PlaybackHand,
     looping: Boolean,
-    onEndMeasureChange: (Int) -> Unit,
+    onRangeChange: (Int, Int) -> Unit,
     onSpeedChange: (Double) -> Unit,
     onHandChange: (PlaybackHand) -> Unit,
     onLoopingChange: (Boolean) -> Unit,
@@ -1396,7 +1531,7 @@ private fun PlaybackSettingsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.66f)
+                .fillMaxHeight(0.82f)
                 .padding(horizontal = 16.dp),
         ) {
             Row(
@@ -1422,15 +1557,21 @@ private fun PlaybackSettingsSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("从第 $startMeasure 小节到第 $endMeasure 小节", modifier = Modifier.weight(1f))
-                TextButton(
-                    onClick = { onEndMeasureChange((endMeasure - 1).coerceAtLeast(startMeasure)) },
-                    enabled = endMeasure > startMeasure,
-                ) { Text("−") }
-                TextButton(
-                    onClick = { onEndMeasureChange((endMeasure + 1).coerceAtMost(score.measureCount)) },
-                    enabled = endMeasure < score.measureCount,
-                ) { Text("+") }
+                TextButton(onClick = { onRangeChange(startMeasure, startMeasure) }) { Text("当前小节") }
+                TextButton(onClick = { onRangeChange(1, score.measureCount) }) { Text("全篇") }
             }
+            RangeMeasurePicker(
+                label = "起点",
+                measures = 1..score.measureCount,
+                selected = startMeasure,
+                onSelect = { start -> onRangeChange(start, endMeasure.coerceAtLeast(start)) },
+            )
+            RangeMeasurePicker(
+                label = "终点",
+                measures = startMeasure..score.measureCount,
+                selected = endMeasure,
+                onSelect = { end -> onRangeChange(startMeasure, end) },
+            )
 
             Text("速度", modifier = Modifier.padding(top = 10.dp), style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1463,7 +1604,7 @@ private fun PlaybackSettingsSheet(
                 )
             }
             Text(
-                "点击谱面上方的小节可更换起点；试听时会使用谱面游标跟随当前拍位。",
+                "可直接选择起止小节；试听时会使用谱面游标跟随当前拍位。",
                 modifier = Modifier.padding(top = 12.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

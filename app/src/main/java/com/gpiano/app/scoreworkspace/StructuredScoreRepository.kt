@@ -192,6 +192,10 @@ class StructuredScoreRepository(
         loadValidSession(structure)
     }
 
+    suspend fun listStructures(): List<ScoreStructure> = withContext(Dispatchers.IO) {
+        dao.allStructures().sortedByDescending(ScoreStructure::updatedAt)
+    }
+
     suspend fun export(session: PersistentScoreSession, destination: Uri) = withContext(Dispatchers.IO) {
         val storedRevision = dao.findRevision(session.revision.id) ?: error("当前修订版本不存在")
         require(storedRevision.structureId == session.structure.id) { "当前修订不属于这份结构化乐谱" }

@@ -20,6 +20,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.gpiano.app.viewmodel.LibraryViewModel
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -49,7 +50,7 @@ private enum class Destination(val label: String, val icon: ImageVector) {
 fun GpianoApp() {
     val context = LocalContext.current.applicationContext
     val workspaceSelectionStore = remember { WorkspaceSelectionStore(context) }
-    var destination by remember { mutableStateOf(Destination.Library) }
+    var destination by rememberSaveable { mutableStateOf(Destination.Library) }
     var readerOpen by remember { mutableStateOf(false) }
     var openedScore by remember { mutableStateOf<Score?>(null) }
     val libraryViewModel: LibraryViewModel = viewModel()
@@ -61,7 +62,10 @@ fun GpianoApp() {
     val recognitionJobs by libraryViewModel.recognitionJobs.collectAsState()
     val omrSettingsState by libraryViewModel.omrSettingsState.collectAsState()
     val aiSettingsState by libraryViewModel.aiSettingsState.collectAsState()
-    var workspaceStructureId by remember { mutableStateOf(workspaceSelectionStore.load()) }
+    var autoRestoreWorkspace by rememberSaveable { mutableStateOf(workspaceSelectionStore.autoRestoreEnabled()) }
+    var workspaceStructureId by rememberSaveable {
+        mutableStateOf(workspaceSelectionStore.load().takeIf { autoRestoreWorkspace })
+    }
 
     if (readerOpen) {
         BackHandler { readerOpen = false }
@@ -75,7 +79,12 @@ fun GpianoApp() {
                 Destination.entries.forEach { item ->
                     NavigationBarItem(
                         selected = destination == item,
-                        onClick = { destination = item },
+                        onClick = {
+                            if (item == Destination.Workspace && destination != Destination.Workspace) {
+                                workspaceStructureId = workspaceSelectionStore.load().takeIf { autoRestoreWorkspace }
+                            }
+                            destination = item
+                        },
                         icon = { Icon(item.icon, contentDescription = item.label) },
                         label = { Text(item.label) },
                         colors = NavigationBarItemDefaults.colors(),
@@ -111,7 +120,21 @@ fun GpianoApp() {
                 onNameChange = libraryViewModel::clearFolderError,
                 onCreate = libraryViewModel::createFolder,
             )
-            Destination.Workspace -> StructuredScoreWorkspaceScreen(contentPadding = padding, structureId = workspaceStructureId)
+            Destination.Workspace -> StructuredScoreWorkspaceScreen(
+                contentPadding = padding,
+                structureId = workspaceStructureId,
+                autoRestoreEnabled = autoRestoreWorkspace,
+                onSelectStructure = { structureId ->
+                    workspaceStructureId = structureId
+                    workspaceSelectionStore.save(structureId)
+                },
+                onChooseAnotherScore = { workspaceStructureId = null },
+                onOpenLibrary = { destination = Destination.Library },
+                onAutoRestoreChange = { enabled ->
+                    autoRestoreWorkspace = enabled
+                    workspaceSelectionStore.setAutoRestoreEnabled(enabled)
+                },
+            )
             Destination.Settings -> RestoreSettingsScreen(
                 contentPadding = padding,
                 backupState = backupState,

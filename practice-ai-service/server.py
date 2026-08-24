@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import os
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -66,13 +68,27 @@ class RequestProblem(Exception):
 
 def validate_provider_endpoint(value: str, allow_insecure_loopback: bool = False) -> None:
     parsed = urllib.parse.urlsplit(value)
-    loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    hostname = parsed.hostname
+    loopback = hostname in {"127.0.0.1", "localhost", "::1"}
     secure = parsed.scheme == "https"
     allowed_development_url = allow_insecure_loopback and loopback and parsed.scheme == "http"
-    if (not secure and not allowed_development_url) or not parsed.hostname or parsed.username or parsed.password:
+    if (not secure and not allowed_development_url) or not hostname or parsed.username or parsed.password:
         raise ValueError(
             "GPIANO_MODEL_ENDPOINT must use HTTPS; explicit development mode only permits HTTP loopback",
         )
+    if allowed_development_url:
+        return
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM)}
+    except socket.gaierror as error:
+        raise ValueError("GPIANO_MODEL_ENDPOINT host cannot be resolved") from error
+    if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
+        raise ValueError("GPIANO_MODEL_ENDPOINT must resolve only to public network addresses")
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        return None
 
 
 def validate_request(payload: Any) -> dict[str, Any]:
@@ -186,7 +202,7 @@ def normalize_model_response(content: str, request_payload: dict[str, Any]) -> d
 def provider_request(
     config: Config,
     payload: dict[str, Any],
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     if not config.model_ready:
         raise RequestProblem("model_not_configured", "生成式模型尚未配置", HTTPStatus.SERVICE_UNAVAILABLE)
@@ -218,8 +234,9 @@ def provider_request(
             "Accept": "application/json",
         },
     )
+    request_opener = opener or urllib.request.build_opener(NoRedirectHandler()).open
     try:
-        with opener(request, timeout=config.timeout_seconds) as response:
+        with request_opener(request, timeout=config.timeout_seconds) as response:
             raw = response.read(MAX_PROVIDER_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         raise RequestProblem("provider_unavailable", "模型服务暂时不可用", HTTPStatus.BAD_GATEWAY) from error

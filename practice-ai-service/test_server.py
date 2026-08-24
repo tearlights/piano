@@ -1,8 +1,17 @@
 import io
 import json
 import unittest
+from unittest.mock import patch
 
-from server import Config, RequestProblem, normalize_model_response, provider_request, validate_request
+from server import (
+    Config,
+    NoRedirectHandler,
+    RequestProblem,
+    normalize_model_response,
+    provider_request,
+    validate_provider_endpoint,
+    validate_request,
+)
 
 
 REQUEST = {
@@ -30,6 +39,20 @@ class FakeResponse:
 
 
 class PracticeAiServiceTest(unittest.TestCase):
+    def test_rejects_private_provider_addresses(self):
+        with patch("server.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("192.168.1.10", 443))]):
+            with self.assertRaises(ValueError):
+                validate_provider_endpoint("https://model.example/v1/chat")
+
+    def test_allows_explicit_http_loopback_only_for_development(self):
+        with self.assertRaises(ValueError):
+            validate_provider_endpoint("http://127.0.0.1:8443/v1/chat")
+        validate_provider_endpoint("http://127.0.0.1:8443/v1/chat", allow_insecure_loopback=True)
+
+    def test_provider_redirects_are_not_followed(self):
+        handler = NoRedirectHandler()
+        self.assertIsNone(handler.redirect_request(None, None, 302, "Found", {}, "https://attacker.example"))
+
     def test_requires_explicit_consent(self):
         payload = dict(REQUEST, consent=False)
         with self.assertRaises(RequestProblem) as problem:

@@ -266,6 +266,35 @@ class MusicXmlScoreParserTest {
     }
 
     @Test
+    fun durationChangeShiftsFollowingVoiceEventAndKeepsOtherVoiceOnset() {
+        val source = """
+            <score-partwise version="4.0">
+              <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+              <part id="P1"><measure number="1">
+                <attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+                <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type></note>
+                <note><pitch><step>D</step><octave>4</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type></note>
+                <backup><duration>2</duration></backup>
+                <note><pitch><step>E</step><octave>3</octave></pitch><duration>1</duration><voice>2</voice><type>quarter</type></note>
+              </measure></part>
+            </score-partwise>
+        """.trimIndent()
+        val original = MusicXmlScoreParser.parse(source)
+        val firstVoice = original.events.filter { it.voice == "1" }
+        val otherVoice = original.events.single { it.voice == "2" }
+
+        val changed = MusicXmlRevisionCompiler.apply(
+            source,
+            CorrectionOperation.ChangeDuration(firstVoice.first().id, MusicalDuration("half")),
+        )
+
+        assertEquals(2L, changed.score.findEvent(firstVoice[1].id)?.onsetDivisions)
+        assertEquals(otherVoice.onsetDivisions, changed.score.findEvent(otherVoice.id)?.onsetDivisions)
+        assertTrue(changed.xml.replace(Regex("\\s+"), "").contains("<backup><duration>3</duration></backup>"))
+        assertTrue(ScoreIrValidator.validate(changed.score).isEmpty())
+    }
+
+    @Test
     fun convertsStandaloneNoteToRestAndBackWithoutChangingEventIdentity() {
         val original = MusicXmlScoreParser.parse(xml)
         val target = original.events.first { event ->

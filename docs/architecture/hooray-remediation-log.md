@@ -70,6 +70,12 @@
 - 测试：新增 `ScoreIrValidatorTest`，覆盖零时值、同声部重叠、结束位置溢出和 `Int.MAX_VALUE` 拍数的 Long 计算；包括真实 24 小节谱在内的 Android 全量 JVM 测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### `changeDuration` 破坏多声部 `backup/forward`
+
+- 修复：和弦组时值变化后，同 voice 的后续事件按新时值自然移动；编译器同步调整目标组之后第一个 `backup`/`forward` 的 duration 抵消游标差值，使其他 voice/staff 的既有 onset 不漂移。补偿值不能为负，变为 0 时移除控制节点；重解析后继续由 ScoreIR 重叠校验把关。
+- 测试：新增双 voice MusicXML 用例，将第一音从四分音符改为二分音符，验证同 voice 后一音后移、另一 voice onset 不变、`backup` 从 2 调整为 3 且结果通过 ScoreIR 校验；Android 全量 JVM 测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### AI provider SSRF 与密钥重定向
 
 - 修复：模型端点启动校验会解析全部地址并拒绝非公网 IP；仅显式开发模式允许 HTTP loopback。provider 请求使用禁止重定向的 opener，授权头不会跟随 30x 发往其他目标。

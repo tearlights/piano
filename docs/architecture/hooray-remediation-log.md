@@ -46,6 +46,12 @@
 - 测试：Android 全量 JVM 测试与 Debug 构建通过；真机播放/滚动回归已覆盖全篇与快速往返。
 - 提交：见包含本节的独立提交。
 
+### 备份导出/导入 JSON 限额不对称
+
+- 修复：`library.json` 和 `manifest.json` 在导出、导入两侧统一使用 64 MiB UTF-8 字节上限；导出先序列化并校验，再打开目标文件写入，避免生成 App 自己无法恢复的包或留下半写入目标。
+- 测试：新增 `GpianoBackupLimitsTest`，覆盖边界值接受和超 1 字节拒绝；Android 全量 JVM 测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### AI provider SSRF 与密钥重定向
 
 - 修复：模型端点启动校验会解析全部地址并拒绝非公网 IP；仅显式开发模式允许 HTTP loopback。provider 请求使用禁止重定向的 opener，授权头不会跟随 30x 发往其他目标。

@@ -10,8 +10,10 @@
 
 | 问题 | 原因 | 修复 | 验证 | 状态 |
 | --- | --- | --- | --- | --- |
-| 前段可试听、后段提示时间轴不一致 | 不规则 MusicXML 小节使 ScoreIR `PlaybackPlan` 与 alphaTab 累计 tick 分叉；控制器错误地要求两者起点完全相等 | 试听范围、跳转和循环只取 alphaTab `masterBars`；MIDI 目标仍使用 `PlaybackPlan`，仅以小节索引关联 | `AlphaTabPlaybackTimelineTest` 3 项通过；完整单测、构建和真机待执行 | 进行中 |
-| 全篇播放约 20～30 秒后 App 崩溃 | alphaTab 1.8.3 Android 内部滚动在长横向谱面中计算出负动画时长，`Animation.setDuration` 抛异常；`OffScreen` 模式真机验证仍进入同一缺陷路径 | 关闭 alphaTab 内部滚动；Gpiano 仅在小节变化时通过横/纵 Android ScrollView 安全跟随，保留游标和高亮 | crash buffer 两次确认同一堆栈；第二版自动测试和全篇真机回归待执行 | 进行中 |
+| 前段可试听、后段提示时间轴不一致 | 不规则 MusicXML 小节使 ScoreIR `PlaybackPlan` 与 alphaTab 累计 tick 分叉；控制器错误地要求两者起点完全相等 | 试听范围、跳转和循环只取 alphaTab `masterBars`；导入后将实际跨度超过标称拍号的小节标记为不规则小节；MIDI 目标仍使用 `PlaybackPlan`，仅以小节索引关联 | 时间轴与真实 MusicXML/MIDI 回归通过；Android 全量测试和构建通过 | 已修复 |
+| 全篇播放约 20～30 秒后 App 崩溃 | alphaTab Android 内部滚动在长谱面中计算出负动画时长，`Animation.setDuration` 抛异常 | 使用自定义空滚动处理器阻断缺陷动画；Gpiano 仅在小节真正变化时无动画定位，保留游标和高亮 | 真机全篇播放完成且进程未崩溃；Android 全量测试和构建通过 | 已修复 |
+| 所有音听起来断续、疑似极短双触发 | alphaTab 1.8.4 Android 音频 worker 将每次不足固定 buffer 的尾部补零后整块写入 AudioTrack；问题出现在为修崩溃升级之后，生成 MIDI 本身无快速同键重触发 | 回到声音正常的 alphaTab 1.8.3，并以应用侧滚动处理修复崩溃，不再以音频实现变化换取稳定性 | 问题谱 MIDI 事件测试确认同通道同键 120 tick 内无重触发；真机最终听感待用户一次性验收 | 已修复，待验收 |
+| 下滑后上滑谱面消失 | alphaTab 懒加载回收离屏 bitmap 后，回滑路径偶发未完成可见分片重排/重绘 | 保留懒加载并转发原始滚动监听；回滑后对 render surface 补发延迟布局与重绘 | 真机滚到底部再回顶部 1 轮 + 快速往返 3 轮，谱面完整且无应用异常 | 已修复 |
 | 练习工作区直接打开最近谱且无选谱阶段 | 底部入口直接读取同步持久化的单个 `structureId`，工作区没有选谱、切换和恢复偏好 | 增加选谱/最近练习、切换乐谱、空状态、自动恢复设置 | 待实现 | 待处理 |
 
 ## `GPIANO-ISSUE.md` 修复范围

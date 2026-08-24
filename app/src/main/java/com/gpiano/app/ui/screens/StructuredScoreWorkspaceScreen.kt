@@ -5,8 +5,13 @@ import alphaTab.NotationElement
 import alphaTab.collections.DoubleList
 import alphaTab.core.ecmaScript.Uint8Array
 import alphaTab.importer.ScoreLoader
+import alphaTab.IScrollHandler
+import alphaTab.midi.MidiTickLookupFindBeatResultCursorMode
+import alphaTab.rendering.utils.BeatBounds
 import android.util.Log
+import android.view.View
 import android.widget.ScrollView
+import android.widget.HorizontalScrollView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -861,6 +866,7 @@ private fun WorkspaceContent(
                 xml = displayedDocument.xml,
                 score = displayedScore,
                 selectedMeasure = selectedMeasure,
+                playbackMeasure = playerState.currentMeasure,
                 playbackController = playbackController,
                 modifier = Modifier.weight(1f),
             )
@@ -979,6 +985,7 @@ private fun ScoreRenderer(
     xml: String,
     score: ScoreIr,
     selectedMeasure: Int,
+    playbackMeasure: Int?,
     playbackController: AlphaTabPlaybackController,
     modifier: Modifier = Modifier,
 ) {
@@ -992,6 +999,21 @@ private fun ScoreRenderer(
                         var loadStarted = false
                         settings.player.enableCursor = true
                         settings.player.enableElementHighlighting = true
+                        settings.player.configureGpianoScrolling()
+                        api.customScrollHandler = object : IScrollHandler {
+                            override fun forceScrollTo(currentBeatBounds: BeatBounds) = Unit
+
+                            override fun onBeatCursorUpdating(
+                                startBeat: BeatBounds,
+                                endBeat: BeatBounds?,
+                                cursorMode: MidiTickLookupFindBeatResultCursorMode,
+                                actualBeatCursorStartX: Double,
+                                actualBeatCursorEndX: Double,
+                                actualBeatCursorTransitionDuration: Double,
+                            ) = Unit
+
+                            override fun close() = Unit
+                        }
                         settings.notation.elements.set(NotationElement.TrackNames, false)
                         settings.notation.elements.set(NotationElement.ScoreTitle, false)
                         settings.notation.elements.set(NotationElement.ScoreSubTitle, false)
@@ -1025,6 +1047,7 @@ private fun ScoreRenderer(
                             )
                             post {
                                 renderState = ScoreRenderState.Ready
+                                stabilizeGpianoLazyRendering()
                                 playbackController.markScoreRendered()
                                 scrollToMeasure(tag as? Int ?: 1)
                             }
@@ -1048,9 +1071,15 @@ private fun ScoreRenderer(
                                             uint8Constructor.newInstance(bytes, null) as Uint8Array,
                                             api.settings,
                                         )
+                                        val normalizedBars = AlphaTabPlaybackTimeline
+                                            .normalizeOverfullMeasures(score)
                                         val trackIndexes = DoubleList()
                                         for (track in score.tracks) trackIndexes.push(track.index)
-                                        Log.d("GpianoAlphaTab", "parsed score: tracks=${score.tracks.count()}")
+                                        Log.d(
+                                            "GpianoAlphaTab",
+                                            "parsed score: tracks=${score.tracks.count()}, " +
+                                                "normalizedOverfullBars=$normalizedBars",
+                                        )
                                         api.renderScore(score, trackIndexes)
                                     }.onFailure { error ->
                                         Log.e("GpianoAlphaTab", "MusicXML parse failed", error)
@@ -1064,8 +1093,11 @@ private fun ScoreRenderer(
                     }
                 },
                 update = { view ->
-                    view.tag = selectedMeasure
-                    if (renderState is ScoreRenderState.Ready) view.scrollToMeasure(selectedMeasure)
+                    val targetMeasure = playbackMeasure ?: selectedMeasure
+                    if (view.tag != targetMeasure) {
+                        view.tag = targetMeasure
+                        if (renderState is ScoreRenderState.Ready) view.scrollToMeasure(targetMeasure)
+                    }
                 },
                 onRelease = { view -> playbackController.detach(view) },
             )
@@ -1958,20 +1990,75 @@ private fun revisionDescription(kind: String, operationJson: String?): String {
 @OptIn(ExperimentalContracts::class, ExperimentalUnsignedTypes::class)
 private fun AlphaTabView.scrollToMeasure(measure: Int) {
     val bounds = api.boundsLookup?.findMasterBarByIndex((measure - 1).toDouble()) ?: return
-    val scrollView = findViewById<ScrollView>(AlphaTabR.id.innerScroll) ?: return
-    scrollView.post {
+    val verticalScroll = findViewById<ScrollView>(AlphaTabR.id.innerScroll) ?: return
+    val horizontalScroll = findViewById<HorizontalScrollView>(AlphaTabR.id.outerScroll) ?: return
+    verticalScroll.post {
         Log.d(
             "GpianoAlphaTab",
             "measure=$measure visual=${bounds.visualBounds.y}/${bounds.visualBounds.h}, " +
                 "real=${bounds.realBounds.y}/${bounds.realBounds.h}, " +
                 "line=${bounds.lineAlignedBounds.y}/${bounds.lineAlignedBounds.h}, " +
-                "scroll=${scrollView.scrollY}, child=${scrollView.getChildAt(0)?.height}, " +
-                "viewport=${scrollView.height}",
+                "scroll=${horizontalScroll.scrollX}/${verticalScroll.scrollY}, " +
+                "viewport=${horizontalScroll.width}x${verticalScroll.height}",
         )
+        val density = resources.displayMetrics.density
+        val targetX = (bounds.visualBounds.x * density)
+            .roundToInt()
+            .minus((32 * density).roundToInt())
+            .coerceAtLeast(0)
         val targetY = (bounds.visualBounds.y * resources.displayMetrics.density)
             .roundToInt()
             .minus((32 * resources.displayMetrics.density).roundToInt())
             .coerceAtLeast(0)
-        scrollView.smoothScrollTo(0, targetY)
+        horizontalScroll.scrollTo(targetX, 0)
+        verticalScroll.scrollTo(0, targetY)
+    }
+}
+
+@OptIn(ExperimentalContracts::class, ExperimentalUnsignedTypes::class)
+private fun AlphaTabView.stabilizeGpianoLazyRendering() {
+    val renderSurface = findViewById<View>(AlphaTabR.id.renderSurface) ?: return
+    val alphaTabScrollListener = renderSurface as? View.OnScrollChangeListener ?: return
+    val verticalScroll = findViewById<ScrollView>(AlphaTabR.id.innerScroll) ?: return
+    val horizontalScroll = findViewById<HorizontalScrollView>(AlphaTabR.id.outerScroll) ?: return
+    val restoreVisibleParts = Runnable {
+        renderSurface.requestLayout()
+        renderSurface.postInvalidate()
+    }
+    verticalScroll.setOnScrollChangeListener { view, x, y, oldX, oldY ->
+        alphaTabScrollListener.onScrollChange(view, x, y, oldX, oldY)
+        if (y < oldY) {
+            renderSurface.removeCallbacks(restoreVisibleParts)
+            renderSurface.postDelayed(restoreVisibleParts, 80L)
+        }
+    }
+    horizontalScroll.setOnScrollChangeListener { view, x, y, oldX, oldY ->
+        alphaTabScrollListener.onScrollChange(view, x, y, oldX, oldY)
+        if (x < oldX) {
+            renderSurface.removeCallbacks(restoreVisibleParts)
+            renderSurface.postDelayed(restoreVisibleParts, 80L)
+        }
+    }
+}
+
+@Composable
+private fun RangeMeasurePicker(
+    label: String,
+    measures: IntRange,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+) {
+    Text(label, modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.labelMedium)
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        items(measures.toList(), key = { "$label-$it" }) { measure ->
+            FilterChip(
+                selected = measure == selected,
+                onClick = { onSelect(measure) },
+                label = { Text(measure.toString()) },
+            )
+        }
     }
 }

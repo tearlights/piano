@@ -28,3 +28,18 @@ ADR-0009 使用 alphaTab 1.6.1 完成了 Android 刻谱技术验证。结构化�
 - Android 播放仍依赖应用内 SoundFont，首次准备期间必须显示状态；失败后保留重新尝试和停止路径。
 - 旧版为 `UiFacade.load` 使用的隔离适配暂时保留，待新版本公开加载入口通过测试后再删除，避免一次升级同时改变两个变量。
 - 构建工具链同步升级，需用完整单元测试、Debug 构建和既有安装数据升级验证，防止把播放器升级问题与数据库迁移问题混淆。
+
+## 2026-08-24 实现校正
+
+真机导入的 MusicXML 出现了拍号标称长度与事件实际跨度不一致的不规则小节。`PlaybackPlan` 与 alphaTab 对该输入的累计结果不同，旧控制器在开始播放前比较两者起始 tick，导致前段可播、后段被“播放时间轴与结构化乐谱不一致”主动拒绝。
+
+实现现已恢复本 ADR 第 3 条的边界：
+
+- 手机试听的起点、终点、循环边界和跳转位置只读取 alphaTab 当前乐谱的 `tickCache.masterBars`；
+- `PlaybackSelection` 只传递用户选择的小节索引、速度、循环和手别，不再把 `PlaybackPlan.rangeStartTick` 当作 alphaTab 时间轴断言；
+- `PlaybackPlan` 继续作为 ScoreIR 驱动的 MIDI 匹配与标准 MIDI 导出时间轴，两条时间轴通过稳定小节索引关联，不混用 tick；
+- alphaTab 小节缺失、重复、越界或范围无效时仍明确失败，不以猜测位置继续播放。
+
+Android 依赖继续固定为 alphaTab 1.8.3。1.8.4 的 `AndroidAudioWorker.writeSamples` 会把未填满的固定缓冲尾部补零后整块写入 `AudioTrack`，与升级后出现的全局断续听感时间上吻合；实际生成 MIDI 未发现同通道同键的极短重复起音。崩溃改由自定义 `IScrollHandler` 隔离 alphaTab 缺陷滚动动画，不再通过升级音频实现解决。
+
+谱面仍启用懒加载。Gpiano 转发 alphaTab render surface 的滚动监听，并在向上/向左回滑后补发布局与重绘，避免离屏 bitmap 回收后可见分片未恢复；不得再次用关闭懒加载作为修复，因为该设置已在真机导致整张谱面全白。

@@ -1021,7 +1021,10 @@ private fun WorkspaceContent(
 ) {
     val displayedDocument = practiceVersion?.document ?: session.document
     val displayedScore = displayedDocument.score
-    val summary = displayedScore.toSummary()
+    val summary = displayedDocument.summary
+    val selectedMeasureEventCount = remember(displayedScore, selectedMeasure) {
+        displayedScore.eventsInMeasure(selectedMeasure).size
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         ScoreMetadata(
             summary = summary,
@@ -1055,7 +1058,7 @@ private fun WorkspaceContent(
         HorizontalDivider()
         SelectedMeasureStatus(
             selectedMeasure = selectedMeasure,
-            eventCount = displayedScore.eventsInMeasure(selectedMeasure).size,
+            eventCount = selectedMeasureEventCount,
             statusMessage = practiceVersion?.recoveryMessage ?: session.recoveryMessage,
             playbackEndMeasure = playbackEndMeasure,
             playerState = playerState,
@@ -1704,7 +1707,7 @@ private fun CorrectionSheet(
     canRedo: Boolean,
     onDismiss: () -> Unit,
 ) {
-    val events = score.eventsInMeasure(measureIndex)
+    val events = remember(score, measureIndex) { score.eventsInMeasure(measureIndex) }
     val selectedEvent = events.firstOrNull { it.id == selectedEventId }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(

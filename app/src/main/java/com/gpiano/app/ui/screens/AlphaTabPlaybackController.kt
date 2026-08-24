@@ -9,6 +9,7 @@ import alphaTab.synth.PlayerState
 import com.gpiano.app.scoreworkspace.PlaybackHand
 import com.gpiano.app.scoreworkspace.PlaybackPlan
 import com.gpiano.app.scoreworkspace.ScoreHand
+import androidx.compose.runtime.Immutable
 import kotlin.contracts.ExperimentalContracts
 
 enum class ScorePlayerPhase {
@@ -19,6 +20,7 @@ enum class ScorePlayerPhase {
     Failed,
 }
 
+@Immutable
 data class ScorePlayerUiState(
     val phase: ScorePlayerPhase = ScorePlayerPhase.Preparing,
     val currentMeasure: Int? = null,

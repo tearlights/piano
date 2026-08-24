@@ -105,3 +105,8 @@
 ## MIDI 变量长度编码
 
 - 标准 MIDI delta-time 编码器提取为单一内部实现，并锁定所有 1/2/3/4 字节切换边界与格式最大值；超过 0x0FFFFFFF 的间隔明确拒绝。
+
+## MIDI 字节流解析
+
+- 实时 MIDI 解析器显式跟踪 SysEx 起止；SysEx 载荷中的 channel status 字节不会再被解释为 note-on。未闭合 SysEx 持续隔离到 `F7` 或显式 reset，以安全处理截断输入。
+- MIDI real-time 字节继续可插入分片 channel message，且不破坏 running status。

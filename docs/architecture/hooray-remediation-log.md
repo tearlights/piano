@@ -148,6 +148,12 @@
 - 测试：`StandardMidiFileTest` 精确核对 0、0x7F、0x80、0x3FFF、0x4000、0x0FFFFFFF 的字节序列，并验证 0x10000000 被拒绝；Android JVM 全量测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### MIDI 解析器不跟踪 SysEx 状态
+
+- 修复：解析器增加跨 `feed` 调用保存的 SysEx 状态；`F0` 后的全部非 real-time 字节隔离到 `F7`，因此畸形载荷中的 `0x90` 不能注入按键。截断 SysEx 只可由结束字节或 `reset` 恢复，real-time 字节不改变 SysEx、running status 或部分消息状态。
+- 测试：`MidiMessageParserTest` 新增跨分片 SysEx 伪 note-on、截断后 reset，以及插入 timing clock 的 running-status 分片三类用例；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### Room v1-v6 升级缺少 `lastOpenedAt`
 
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。

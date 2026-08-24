@@ -10,6 +10,7 @@ data class MidiNoteMessage(
 /** Parses fragmented channel messages and MIDI running status. */
 class MidiMessageParser {
     private var runningStatus: Int? = null
+    private var inSystemExclusive = false
     private val data = ArrayList<Int>(2)
 
     fun feed(bytes: ByteArray, offset: Int = 0, count: Int = bytes.size - offset): List<MidiNoteMessage> {
@@ -19,6 +20,14 @@ class MidiMessageParser {
             val value = bytes[index].toInt() and 0xFF
             when {
                 value >= 0xF8 -> Unit // Real-time messages may be interleaved anywhere.
+                inSystemExclusive -> {
+                    if (value == 0xF7) inSystemExclusive = false
+                }
+                value == 0xF0 -> {
+                    inSystemExclusive = true
+                    runningStatus = null
+                    data.clear()
+                }
                 value >= 0xF0 -> {
                     runningStatus = null
                     data.clear()
@@ -52,6 +61,7 @@ class MidiMessageParser {
 
     fun reset() {
         runningStatus = null
+        inSystemExclusive = false
         data.clear()
     }
 }

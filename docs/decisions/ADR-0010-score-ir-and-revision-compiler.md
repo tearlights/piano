@@ -44,6 +44,8 @@
 
 ## 持久化与备份约束
 
+实现补充（2026-08-25）：任何解析、编辑、派生或恢复得到的 ScoreIR 在持久化前必须拒绝非正时值、负 onset、`onset + duration` 溢出、事件声部/小节索引错位，以及同一 voice/staff 中非和弦起音的时间重叠。`divisions`、拍数和拍号分母必须为正；播放时标称小节 tick 的乘法从第一项开始使用 Long。
+
 本 ADR 首先落地纯内存解析、修改和往返测试，不改变 Room schema。进入持久化时新增 `ScoreStructure`、`ScoreRevision` 与位置映射，并同时完成数据库迁移和 `.gpiano` 新格式；旧格式版本 1 必须继续可导入。
 
 ## 原因

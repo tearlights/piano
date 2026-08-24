@@ -64,6 +64,12 @@
 - 测试：新增 `BackupRestoreDaoTest`，覆盖空快照仍完整清表、子到父清理顺序和父到子插入顺序；Android 全量 JVM 测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### ScoreIR 弱校验与标称小节 tick 溢出
+
+- 修复：ScoreIR 校验新增声部/小节索引一致性、正 divisions/拍号、严格正时值、结束位置 Long 溢出和同 voice/staff 事件重叠检查；播放计划的标称小节长度从运算第一步即使用 Long，并拒绝非正拍号。
+- 测试：新增 `ScoreIrValidatorTest`，覆盖零时值、同声部重叠、结束位置溢出和 `Int.MAX_VALUE` 拍数的 Long 计算；包括真实 24 小节谱在内的 Android 全量 JVM 测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### AI provider SSRF 与密钥重定向
 
 - 修复：模型端点启动校验会解析全部地址并拒绝非公网 IP；仅显式开发模式允许 HTTP loopback。provider 请求使用禁止重定向的 opener，授权头不会跟随 30x 发往其他目标。

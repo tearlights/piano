@@ -35,12 +35,12 @@ object StandardMidiFile {
         var previousTick = 0L
         events.forEach { event ->
             require(event.tick >= previousTick) { "MIDI 事件时间顺序无效" }
-            track.writeVariableLength(event.tick - previousTick)
+            writeMidiVariableLength(track, event.tick - previousTick)
             track.write(event.payload)
             previousTick = event.tick
         }
         val endTick = plan.durationTick.coerceAtLeast(previousTick)
-        track.writeVariableLength(endTick - previousTick)
+        writeMidiVariableLength(track, endTick - previousTick)
         track.write(byteArrayOf(0xff.toByte(), 0x2f, 0x00))
 
         val bytes = ByteArrayOutputStream()
@@ -84,20 +84,6 @@ object StandardMidiFile {
         (value and 0xff).toByte(),
     )
 
-    private fun ByteArrayOutputStream.writeVariableLength(value: Long) {
-        require(value in 0..0x0fff_ffffL) { "MIDI 事件间隔超出格式范围" }
-        var remaining = value
-        var buffer = remaining and 0x7f
-        while (remaining.also { remaining = it ushr 7 } > 0x7f) {
-            buffer = (buffer shl 8) or ((remaining and 0x7f) or 0x80)
-        }
-        while (true) {
-            write((buffer and 0xff).toInt())
-            if (buffer and 0x80 == 0L) break
-            buffer = buffer ushr 8
-        }
-    }
-
     private fun ByteArrayOutputStream.writeAscii(value: String) = write(value.toByteArray(Charsets.US_ASCII))
 
     private fun ByteArrayOutputStream.writeInt16(value: Int) {
@@ -130,4 +116,18 @@ object StandardMidiFile {
 
     private const val DEFAULT_VELOCITY = 80
     private const val TIE_ROUNDING_TOLERANCE_TICKS = 1L
+}
+
+internal fun writeMidiVariableLength(output: ByteArrayOutputStream, value: Long) {
+    require(value in 0..0x0fff_ffffL) { "MIDI 事件间隔超出格式范围" }
+    var remaining = value
+    var buffer = remaining and 0x7f
+    while (remaining.also { remaining = it ushr 7 } > 0x7f) {
+        buffer = (buffer shl 8) or ((remaining and 0x7f) or 0x80)
+    }
+    while (true) {
+        output.write((buffer and 0xff).toInt())
+        if (buffer and 0x80 == 0L) break
+        buffer = buffer ushr 8
+    }
 }

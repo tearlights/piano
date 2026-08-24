@@ -1,7 +1,9 @@
 package com.gpiano.app.scoreworkspace
 
+import java.io.ByteArrayOutputStream
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -65,6 +67,25 @@ class StandardMidiFileTest {
 
         assertEquals(1, rounded.countSequence(byteArrayOf(0x90.toByte(), 60, 80)))
         assertEquals(2, realGap.countSequence(byteArrayOf(0x90.toByte(), 60, 80)))
+    }
+
+    @Test
+    fun variableLengthEncodingMatchesMidiBoundaryValues() {
+        mapOf(
+            0L to byteArrayOf(0x00),
+            0x7fL to byteArrayOf(0x7f),
+            0x80L to byteArrayOf(0x81.toByte(), 0x00),
+            0x3fffL to byteArrayOf(0xff.toByte(), 0x7f),
+            0x4000L to byteArrayOf(0x81.toByte(), 0x80.toByte(), 0x00),
+            0x0fff_ffffL to byteArrayOf(0xff.toByte(), 0xff.toByte(), 0xff.toByte(), 0x7f),
+        ).forEach { (value, expected) ->
+            val output = ByteArrayOutputStream()
+            writeMidiVariableLength(output, value)
+            assertArrayEquals("value=$value", expected, output.toByteArray())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            writeMidiVariableLength(ByteArrayOutputStream(), 0x1000_0000L)
+        }
     }
 
     private fun plan(speed: Double = 1.0, events: List<PlaybackEvent>) = PlaybackPlan(

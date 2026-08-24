@@ -142,6 +142,12 @@
 - 测试：`StandardMidiFileTest` 新增 1 tick 仍为一次 note-on、2 tick 保持两次 note-on 的成对边界用例；Android JVM 全量测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### MIDI 变量长度编码边界缺测
+
+- 修复：delta-time 变量长度写入器提取为可直接验证的内部函数，导出路径仍复用同一实现并保留格式上限检查。
+- 测试：`StandardMidiFileTest` 精确核对 0、0x7F、0x80、0x3FFF、0x4000、0x0FFFFFFF 的字节序列，并验证 0x10000000 被拒绝；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### Room v1-v6 升级缺少 `lastOpenedAt`
 
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。

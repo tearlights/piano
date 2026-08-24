@@ -303,6 +303,19 @@ class MusicXmlScoreParserTest {
     }
 
     @Test
+    fun transposeRejectsOutOfRangePitchInsteadOfClamping() {
+        assertThrows(IllegalArgumentException::class.java) {
+            ScorePitch('G', 0, 9).transpose(1, preferSharps = true)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ScorePitch('C', 0, 0).transpose(-1, preferSharps = false)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ScorePitch('C', 0, 4).transpose(Int.MAX_VALUE, preferSharps = true)
+        }
+    }
+
+    @Test
     fun durationChangeShiftsFollowingVoiceEventAndKeepsOtherVoiceOnset() {
         val source = """
             <score-partwise version="4.0">

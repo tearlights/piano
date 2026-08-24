@@ -36,12 +36,16 @@ data class ScorePitch(
         }
 
     fun transpose(semitones: Int, preferSharps: Boolean): ScorePitch {
-        val targetMidi = (midi + semitones).coerceIn(0, 127)
-        return fromMidi(targetMidi, preferSharps)
+        val targetMidi = midi.toLong() + semitones
+        require(targetMidi in MIN_REPRESENTABLE_MIDI..127L) {
+            "移调结果超出 MusicXML 可表示的 MIDI 音高：$targetMidi"
+        }
+        return fromMidi(targetMidi.toInt(), preferSharps)
     }
 
     companion object {
         private val VALID_STEPS = setOf('A', 'B', 'C', 'D', 'E', 'F', 'G')
+        private const val MIN_REPRESENTABLE_MIDI = 12L
         private val STEP_SEMITONES = mapOf(
             'C' to 0,
             'D' to 2,

@@ -124,6 +124,12 @@
 - 测试：`MusicXmlScoreParserTest` 新增内部外部实体载荷拒绝，以及指向本地恶意 DTD 仍不读取且可安全解析的用例；真实带 MusicXML 4.0 DOCTYPE 的 24 小节谱继续通过。Android JVM 全量测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### `ScorePitch.transpose` 越界静默夹值
+
+- 修复：移调先以 Long 计算目标 MIDI，再要求结果位于 MusicXML 音高模型可表示的 12..127；不再用 `coerceIn` 把不同的越界编辑全部变成边界音。
+- 测试：新增最高音上移、最低可表示音下移和 `Int.MAX_VALUE` 半音三类拒绝用例；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### Room v1-v6 升级缺少 `lastOpenedAt`
 
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。

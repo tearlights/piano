@@ -88,3 +88,8 @@
 
 - DOM 解析强制启用 secure processing，并禁止外部 DTD/schema 访问；实体解析器继续在平台 feature 不完整时提供无网络、无文件访问的兜底。
 - 保留常见 MusicXML 外部 DOCTYPE 兼容性，但在构造解析器前拒绝实体声明和内联 DTD，阻断 XXE 与实体展开载荷。
+
+## 音高移调边界
+
+- `ScorePitch.transpose` 不再把越界结果静默夹到边界音；超出 MusicXML 可表示范围或 MIDI 127 时明确拒绝本次编辑，避免最高音被悄悄改成错误音高。
+- 移调加法使用 Long 中间值，极端半音参数不会先发生 Int 溢出。

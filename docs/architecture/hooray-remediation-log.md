@@ -136,6 +136,12 @@
 - 测试：新增非法 alter 文本、alter=3、octave=10 与多字符 step 四类用例，全部核对统一错误边界；Android JVM 全量测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### MIDI 延音合并依赖精确 tick
+
+- 修复：同音高、同手别且带对应 tie 标记的相邻事件，在连接点相差不超过 1 tick 时合并；容差只吸收 divisions 到 MIDI tick 的舍入误差，不覆盖 2 tick 以上的真实间隔。
+- 测试：`StandardMidiFileTest` 新增 1 tick 仍为一次 note-on、2 tick 保持两次 note-on 的成对边界用例；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### Room v1-v6 升级缺少 `lastOpenedAt`
 
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。

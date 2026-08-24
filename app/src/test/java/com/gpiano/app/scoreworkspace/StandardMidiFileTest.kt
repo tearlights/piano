@@ -44,6 +44,29 @@ class StandardMidiFileTest {
         assertEquals(1, bytes.countSequence(byteArrayOf(0x80.toByte(), 60, 0)))
     }
 
+    @Test
+    fun tiedContinuationToleratesOneTickConversionRoundingOnly() {
+        val rounded = StandardMidiFile.encode(
+            plan(
+                events = listOf(
+                    event("start", ScoreHand.Right, 0, 960, 60, tieStart = true),
+                    event("rounded-stop", ScoreHand.Right, 961, 960, 60, tieStop = true),
+                ),
+            ),
+        )
+        val realGap = StandardMidiFile.encode(
+            plan(
+                events = listOf(
+                    event("start", ScoreHand.Right, 0, 960, 60, tieStart = true),
+                    event("gapped-stop", ScoreHand.Right, 962, 960, 60, tieStop = true),
+                ),
+            ),
+        )
+
+        assertEquals(1, rounded.countSequence(byteArrayOf(0x90.toByte(), 60, 80)))
+        assertEquals(2, realGap.countSequence(byteArrayOf(0x90.toByte(), 60, 80)))
+    }
+
     private fun plan(speed: Double = 1.0, events: List<PlaybackEvent>) = PlaybackPlan(
         selection = PlaybackSelection(1, 1, speed = speed),
         ticksPerQuarter = 960,

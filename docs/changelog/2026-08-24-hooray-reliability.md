@@ -97,3 +97,7 @@
 ## MusicXML 音高错误
 
 - 非数字或超范围的 `step`、`alter`、`octave` 统一报告“无法解析 MusicXML 音高”，不再泄漏底层 `ScorePitch` 构造异常；非法 `alter` 也不会静默退回自然音。
+
+## MIDI 延音合并
+
+- 标准 MIDI 导出允许延音连接点存在至多 1 tick 的 divisions 换算舍入差，避免跨小节延音被导出成第二次击键；2 tick 及以上的真实间隔仍保持独立发音。

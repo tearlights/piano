@@ -1,6 +1,7 @@
 package com.gpiano.app.scoreworkspace
 
 import java.io.ByteArrayOutputStream
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** Compiles the selected [PlaybackPlan] to a portable Standard MIDI File (format 0). */
@@ -61,7 +62,8 @@ object StandardMidiFile {
                 val endTick = event.startTick + event.durationTick
                 val previous = if (event.tieStop) {
                     notes.lastOrNull {
-                        it.pitch == event.midiPitch && it.hand == event.hand && it.canContinue && it.endTick == event.startTick
+                        it.pitch == event.midiPitch && it.hand == event.hand && it.canContinue &&
+                            abs(it.endTick - event.startTick) <= TIE_ROUNDING_TOLERANCE_TICKS
                     }
                 } else {
                     null
@@ -127,4 +129,5 @@ object StandardMidiFile {
     )
 
     private const val DEFAULT_VELOCITY = 80
+    private const val TIE_ROUNDING_TOLERANCE_TICKS = 1L
 }

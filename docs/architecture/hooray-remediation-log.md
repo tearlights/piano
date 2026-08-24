@@ -43,3 +43,9 @@
 - 修复：Room 数据库每次打开时显式执行 `PRAGMA foreign_keys=ON`，使结构、识别任务、修订、练习版本和演奏事件的级联/置空约束生效。
 - 测试：`GpianoDatabaseMigrationTest` 直接执行数据库 callback 并核对外键启用语句；Android JVM 全量测试与 Debug 构建通过。
 - 提交：本项提交完成后回填 SHA。
+
+### 双 part 乐谱左手被误判为右手
+
+- 修复：双 part 乐谱优先按 part 索引判定左右手，`staff` 只用于单 part 的 grand staff；避免左手 part 内部同样从 staff 1 编号时被误判。
+- 测试：新增带两个 part、且两边均声明 `staff=1` 的 MusicXML 回归用例；`MusicXmlScoreParserTest` 与 Android JVM 全量测试通过。
+- 提交：本项提交完成后回填 SHA。

@@ -48,6 +48,31 @@ class MusicXmlScoreParserTest {
     }
 
     @Test
+    fun twoPartScoresUsePartIdentityBeforePartLocalStaffNumber() {
+        val source = """
+            <score-partwise version="4.0">
+              <part-list>
+                <score-part id="RH"><part-name>Right</part-name></score-part>
+                <score-part id="LH"><part-name>Left</part-name></score-part>
+              </part-list>
+              <part id="RH"><measure number="1">
+                <attributes><divisions>1</divisions><time><beats>1</beats><beat-type>4</beat-type></time></attributes>
+                <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><staff>1</staff></note>
+              </measure></part>
+              <part id="LH"><measure number="1">
+                <attributes><divisions>1</divisions><time><beats>1</beats><beat-type>4</beat-type></time></attributes>
+                <note><pitch><step>C</step><octave>3</octave></pitch><duration>1</duration><staff>1</staff></note>
+              </measure></part>
+            </score-partwise>
+        """.trimIndent()
+
+        val score = MusicXmlScoreParser.parse(source)
+
+        assertEquals(ScoreHand.Right, score.parts[0].measures.single().events.single().hand)
+        assertEquals(ScoreHand.Left, score.parts[1].measures.single().events.single().hand)
+    }
+
+    @Test
     fun changesOnePitchWithoutMutatingOriginalOrDroppingStructure() {
         val original = MusicXmlScoreParser.parse(xml)
         val target = original.parts.first().measures.first().events.first()

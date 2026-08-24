@@ -159,10 +159,10 @@ object MusicXmlScoreParser {
     }
 
     private fun resolveHand(partCount: Int, partIndex: Int, staff: Int?): ScoreHand = when {
-        staff == 1 -> ScoreHand.Right
-        staff == 2 -> ScoreHand.Left
         partCount == 2 && partIndex == 0 -> ScoreHand.Right
         partCount == 2 && partIndex == 1 -> ScoreHand.Left
+        staff == 1 -> ScoreHand.Right
+        staff == 2 -> ScoreHand.Left
         else -> ScoreHand.Unknown
     }
 

@@ -58,6 +58,12 @@
 - 测试：`GpianoBackupLimitsTest` 使用含内部 URL/token 和响应片段的任务验证三项敏感字段清空、分类与状态保留；Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### “覆盖恢复”实际合并旧数据
+
+- 修复：新增专用 `BackupRestoreDao.replaceWith` Room 事务，按外键顺序清空 11 张业务表并按依赖顺序写入快照；空快照也执行清空。恢复前记录旧文件引用，数据库提交后清理不再引用的旧文件；异常沿用已有文件回滚。
+- 测试：新增 `BackupRestoreDaoTest`，覆盖空快照仍完整清表、子到父清理顺序和父到子插入顺序；Android 全量 JVM 测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### AI provider SSRF 与密钥重定向
 
 - 修复：模型端点启动校验会解析全部地址并拒绝非公网 IP；仅显式开发模式允许 HTTP loopback。provider 请求使用禁止重定向的 opener，授权头不会跟随 30x 发往其他目标。

@@ -328,7 +328,7 @@ class GpianoBackupManager(private val context: Context) {
         }
     }
 
-    private fun referencedPaths(snapshot: GpianoBackupSnapshot): Set<String> = linkedSetOf<String>().apply {
+    internal fun referencedPaths(snapshot: GpianoBackupSnapshot): Set<String> = linkedSetOf<String>().apply {
         snapshot.scores.map(Score::relativePath).filter(String::isNotBlank).forEach { add(safeDataPath(it)) }
         snapshot.pages.mapNotNull(ScorePage::relativePath).forEach { add(safeDataPath(it)) }
         snapshot.structures.mapNotNull(ScoreStructure::sourceMapRelativePath).forEach { add(safeDataPath(it)) }

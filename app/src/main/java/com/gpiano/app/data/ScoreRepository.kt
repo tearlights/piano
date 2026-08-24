@@ -21,47 +21,22 @@ class ScoreRepository(private val context: Context) {
     fun observeScores(): Flow<List<Score>> = database.scoreDao().observeAll()
 
     suspend fun exportBackup(uri: Uri) = withContext(Dispatchers.IO) {
-        val snapshot = database.withTransaction {
-            GpianoBackupSnapshot(
-                scores = database.scoreDao().getAll(),
-                pages = database.scorePageDao().getAll(),
-                bookmarks = database.bookmarkDao().getAll(),
-                folders = database.folderDao().getAll(),
-                structures = database.scoreStructureDao().allStructures(),
-                revisions = database.scoreStructureDao().allRevisions(),
-                recognitionJobs = database.recognitionJobDao().getAll(),
-                practiceVersions = database.practiceVersionDao().getAll(),
-                practiceAttempts = database.practiceAttemptDao().getAll(),
-                midiPerformanceEvents = database.practiceAttemptDao().getAllEvents(),
-                practiceVersionRevisions = database.practiceVersionDao().getAllRevisions(),
-            )
-        }
+        val snapshot = currentSnapshot()
         GpianoBackupManager(context).export(snapshot, uri)
     }
 
     suspend fun restoreBackup(uri: Uri) = withContext(Dispatchers.IO) {
-        GpianoBackupManager(context).stage(uri).use { staged ->
+        val backupManager = GpianoBackupManager(context)
+        backupManager.stage(uri).use { staged ->
+            val previousPaths = backupManager.referencedPaths(currentSnapshot())
             val files = installStagedFiles(staged)
             try {
                 val snapshot = staged.snapshot
-                database.withTransaction {
-                    if (snapshot.folders.isNotEmpty()) database.folderDao().restoreAll(snapshot.folders)
-                    if (snapshot.scores.isNotEmpty()) database.scoreDao().restoreAll(snapshot.scores)
-                    if (snapshot.pages.isNotEmpty()) database.scorePageDao().restoreAll(snapshot.pages)
-                    if (snapshot.bookmarks.isNotEmpty()) database.bookmarkDao().restoreAll(snapshot.bookmarks)
-                    if (snapshot.structures.isNotEmpty()) database.scoreStructureDao().restoreStructures(snapshot.structures)
-                    if (snapshot.revisions.isNotEmpty()) database.scoreStructureDao().restoreRevisions(snapshot.revisions)
-                    if (snapshot.recognitionJobs.isNotEmpty()) database.recognitionJobDao().restoreAll(snapshot.recognitionJobs)
-                    if (snapshot.practiceVersions.isNotEmpty()) database.practiceVersionDao().restoreAll(snapshot.practiceVersions)
-                    if (snapshot.practiceVersionRevisions.isNotEmpty()) {
-                        database.practiceVersionDao().restoreAllRevisions(snapshot.practiceVersionRevisions)
-                    }
-                    if (snapshot.practiceAttempts.isNotEmpty()) database.practiceAttemptDao().restoreAttempts(snapshot.practiceAttempts)
-                    if (snapshot.midiPerformanceEvents.isNotEmpty()) {
-                        database.practiceAttemptDao().restoreEvents(snapshot.midiPerformanceEvents)
-                    }
-                }
+                database.backupRestoreDao().replaceWith(snapshot)
                 files.complete()
+                (previousPaths - staged.dataPaths).forEach { stalePath ->
+                    runCatching { resolveInside(context.filesDir, stalePath).delete() }
+                }
             } catch (error: Throwable) {
                 files.rollback()
                 throw error
@@ -171,6 +146,22 @@ class ScoreRepository(private val context: Context) {
     }
 
     suspend fun markOpened(score: Score) = database.scoreDao().markOpened(score.id, System.currentTimeMillis())
+
+    private suspend fun currentSnapshot(): GpianoBackupSnapshot = database.withTransaction {
+        GpianoBackupSnapshot(
+            scores = database.scoreDao().getAll(),
+            pages = database.scorePageDao().getAll(),
+            bookmarks = database.bookmarkDao().getAll(),
+            folders = database.folderDao().getAll(),
+            structures = database.scoreStructureDao().allStructures(),
+            revisions = database.scoreStructureDao().allRevisions(),
+            recognitionJobs = database.recognitionJobDao().getAll(),
+            practiceVersions = database.practiceVersionDao().getAll(),
+            practiceAttempts = database.practiceAttemptDao().getAll(),
+            midiPerformanceEvents = database.practiceAttemptDao().getAllEvents(),
+            practiceVersionRevisions = database.practiceVersionDao().getAllRevisions(),
+        )
+    }
 
     private fun pdfPageCount(file: File): Int = android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor -> android.graphics.pdf.PdfRenderer(descriptor).use { it.pageCount } }
 

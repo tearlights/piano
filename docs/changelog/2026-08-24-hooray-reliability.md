@@ -115,3 +115,7 @@
 ## OMR MXL 解包边界
 
 - MXL 的 `META-INF/container.xml` 在解压前检查声明大小并限制为 64 KiB；结合既有的安全相对 rootfile 与 20 MiB MusicXML 上限，阻断小压缩包触发无界 container 分配。
+
+## 占位屏清理
+
+- 删除已被真实曲谱库、收藏、文件夹与恢复设置页面替代的三组静态假数据屏，以及导航中的无效 import，避免维护者误把占位实现当成当前产品路径。

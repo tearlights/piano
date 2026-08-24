@@ -106,6 +106,12 @@
 - 测试：新增 `MidiPracticeControllerVisibilityTest`，通过字段修饰符回归检查锁定跨线程可见性契约；Android JVM 全量测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
 
+### 曲谱导入无进度且允许重复触发
+
+- 修复：PDF 与多图导入在启动协程前通过 `MutableStateFlow.compareAndSet` 原子占用同一个门闩；第二次请求立即忽略，所有终止路径在 `finally` 中释放。曲谱库同步禁用入口并显示复制、校验进度提示。
+- 测试：新增 `LibraryImportGateTest`，8 线程同时竞争只允许一次进入，并验证释放后可再次导入；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
 ### Room v1-v6 升级缺少 `lastOpenedAt`
 
 - 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。

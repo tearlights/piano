@@ -62,6 +62,7 @@ fun GpianoApp() {
     val recognitionJobs by libraryViewModel.recognitionJobs.collectAsState()
     val omrSettingsState by libraryViewModel.omrSettingsState.collectAsState()
     val aiSettingsState by libraryViewModel.aiSettingsState.collectAsState()
+    val importInProgress by libraryViewModel.importInProgress.collectAsState()
     var autoRestoreWorkspace by rememberSaveable { mutableStateOf(workspaceSelectionStore.autoRestoreEnabled()) }
     var workspaceStructureId by rememberSaveable {
         mutableStateOf(workspaceSelectionStore.load().takeIf { autoRestoreWorkspace })
@@ -98,6 +99,7 @@ fun GpianoApp() {
                 contentPadding = padding,
                 scores = scores,
                 importError = libraryViewModel.importError.collectAsState().value,
+                importInProgress = importInProgress,
                 onImport = libraryViewModel::import,
                 onImportAll = libraryViewModel::importAll,
                 onRename = libraryViewModel::rename,

@@ -56,6 +56,8 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     private val _importError = MutableStateFlow<String?>(null)
     val importError = _importError.asStateFlow()
+    private val _importInProgress = MutableStateFlow(false)
+    val importInProgress = _importInProgress.asStateFlow()
 
     private val _folderError = MutableStateFlow<String?>(null)
     val folderError = _folderError.asStateFlow()
@@ -190,12 +192,29 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { recognitionRepository.cancel(jobId) }
     }
 
-    fun importAll(uris: List<Uri>) { viewModelScope.launch { runCatching { repository.importImageGroup(uris) }.onFailure { _importError.value = it.message ?: "导入失败，请重试" } } }
+    fun importAll(uris: List<Uri>) {
+        if (uris.isEmpty() || !beginImport(_importInProgress)) return
+        _importError.value = null
+        viewModelScope.launch {
+            try {
+                runCatching { repository.importImageGroup(uris) }
+                    .onFailure { _importError.value = it.message ?: "导入失败，请重试" }
+            } finally {
+                _importInProgress.value = false
+            }
+        }
+    }
 
     fun import(uri: Uri) {
+        if (!beginImport(_importInProgress)) return
+        _importError.value = null
         viewModelScope.launch {
-            runCatching { repository.import(uri) }
-                .onFailure { _importError.value = it.message ?: "导入失败，请重试" }
+            try {
+                runCatching { repository.import(uri) }
+                    .onFailure { _importError.value = it.message ?: "导入失败，请重试" }
+            } finally {
+                _importInProgress.value = false
+            }
         }
     }
 
@@ -236,3 +255,5 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { repository.markOpened(score) }
     }
 }
+
+internal fun beginImport(state: MutableStateFlow<Boolean>): Boolean = state.compareAndSet(expect = false, update = true)

@@ -201,3 +201,9 @@
 - 修复：单 part 事件在没有 staff 1/2 信息时默认归为右手；staff 信息仍优先，因此单 part grand staff 不受影响，多 part 的未知映射也不会被擅自猜测。
 - 测试：`MusicXmlScoreParserTest` 新增无 staff 单旋律谱，核对事件为 Right、右手计划含音符且左手计划为空；Android JVM 全量测试与 Debug 构建通过。
 - 提交：见包含本节的独立提交。
+
+## 最终语义审计结论
+
+- 小节容量：不把“所有声部必须恰好填满标称拍号”作为通用 ScoreIR 不变量。MusicXML 合法包含弱起、隐式小节、自由长度与本项目演示谱中的 overfull bar；强制等值会拒绝已支持的真实谱。当前不变量是正 divisions/拍号/时值、非负 onset、Long 无溢出、同 voice/staff 不重叠。编辑后的 `backup/forward` 会保持其他声部 onset，alphaTab 临时模型对 overfull bar 重建可听时间轴。
+- OMR 取消：`RecognitionWorker` 已在通用 Throwable 分类之前单独捕获并重新抛出 `CancellationException`，保留 WorkManager 取消语义，无需制造代码改动。
+- 已过时条目：`WorkspaceSelectionStore` 当前使用异步 `apply()`，不是原报告所述同步 `commit()`；AlphaTab 播放范围已由 `AlphaTabPlaybackTimeline.resolve` 覆盖缺失、重复、非有限和反向小节边界。

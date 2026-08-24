@@ -126,6 +126,8 @@ fun StructuredScoreWorkspaceScreen(
     val repository = remember { StructuredScoreRepository(context) }
     val practiceVersionRepository = remember { PracticeVersionRepository(context) }
     val playbackController = remember { AlphaTabPlaybackController() }
+    val editGate = remember { OperationGate() }
+    val practiceVersionGate = remember { OperationGate() }
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<WorkspaceLoadState>(WorkspaceLoadState.Loading) }
     var availableStructures by remember { mutableStateOf<List<ScoreStructure>>(emptyList()) }
@@ -190,12 +192,17 @@ fun StructuredScoreWorkspaceScreen(
         exportPracticeVersionId = null
         if (destination != null && id != null) {
             scope.launch {
-                practiceVersionBusy = true
-                practiceVersionError = null
-                runCatching { practiceVersionRepository.export(id, destination) }
-                    .onFailure { practiceVersionError = it.message ?: "无法导出 MusicXML" }
-                practiceVersionBusy = false
+                try {
+                    runCatching { practiceVersionRepository.export(id, destination) }
+                        .onFailure { practiceVersionError = it.message ?: "无法导出 MusicXML" }
+                } finally {
+                    practiceVersionGate.leave()
+                    practiceVersionBusy = false
+                }
             }
+        } else if (id != null) {
+            practiceVersionGate.leave()
+            practiceVersionBusy = false
         }
     }
     val exportMidi = rememberLauncherForActivityResult(
@@ -235,84 +242,86 @@ fun StructuredScoreWorkspaceScreen(
     val applyOperation: (CorrectionOperation) -> Unit = { operation ->
         val capturedPracticeVersion = activePracticeVersion
         val captured = (state as? WorkspaceLoadState.Ready)?.session
-        if (captured != null) {
+        if (captured != null && editGate.tryEnter()) {
+            editInProgress = true
+            editError = null
             scope.launch {
-                editInProgress = true
-                editError = null
-                runCatching {
-                    withContext(Dispatchers.Default) {
-                        if (capturedPracticeVersion != null) {
-                            practiceVersionRepository.apply(capturedPracticeVersion, operation)
-                        } else {
-                            repository.apply(captured, operation)
+                try {
+                    runCatching {
+                        withContext(Dispatchers.Default) {
+                            if (capturedPracticeVersion != null) {
+                                practiceVersionRepository.apply(capturedPracticeVersion, operation)
+                            } else {
+                                repository.apply(captured, operation)
+                            }
                         }
-                    }
-                }.onSuccess { revised ->
-                    if (revised is PracticeVersionDocument) {
-                        activePracticeVersion = revised
-                        inspectedPracticeVersion = revised
-                    } else if (revised is PersistentScoreSession) {
-                        state = WorkspaceLoadState.Ready(revised)
-                        activePracticeVersion = null
-                    }
-                }.onFailure { error ->
-                    editError = error.message ?: "无法应用这次校正"
+                    }.onSuccess { revised ->
+                        if (revised is PracticeVersionDocument) {
+                            activePracticeVersion = revised
+                            inspectedPracticeVersion = revised
+                        } else if (revised is PersistentScoreSession) {
+                            state = WorkspaceLoadState.Ready(revised)
+                            activePracticeVersion = null
+                        }
+                    }.onFailure { error -> editError = error.message ?: "无法应用这次校正" }
+                } finally {
+                    editGate.leave()
+                    editInProgress = false
                 }
-                editInProgress = false
             }
         }
     }
     val undoRevision: () -> Unit = {
         val capturedPracticeVersion = activePracticeVersion
         val captured = (state as? WorkspaceLoadState.Ready)?.session
-        if (captured != null) {
+        if (captured != null && editGate.tryEnter()) {
+            editInProgress = true
+            editError = null
             scope.launch {
-                editInProgress = true
-                editError = null
-                runCatching {
-                    if (capturedPracticeVersion != null) {
-                        practiceVersionRepository.undo(capturedPracticeVersion)
-                    } else {
-                        repository.undo(captured)
-                    }
-                }.onSuccess { revised ->
-                    if (revised is PracticeVersionDocument) {
-                        activePracticeVersion = revised
-                        inspectedPracticeVersion = revised
-                    } else if (revised is PersistentScoreSession) {
-                        state = WorkspaceLoadState.Ready(revised)
-                        activePracticeVersion = null
-                    }
+                try {
+                    runCatching {
+                        if (capturedPracticeVersion != null) practiceVersionRepository.undo(capturedPracticeVersion)
+                        else repository.undo(captured)
+                    }.onSuccess { revised ->
+                        if (revised is PracticeVersionDocument) {
+                            activePracticeVersion = revised
+                            inspectedPracticeVersion = revised
+                        } else if (revised is PersistentScoreSession) {
+                            state = WorkspaceLoadState.Ready(revised)
+                            activePracticeVersion = null
+                        }
+                    }.onFailure { editError = it.message ?: "无法撤销这次校正" }
+                } finally {
+                    editGate.leave()
+                    editInProgress = false
                 }
-                    .onFailure { editError = it.message ?: "无法撤销这次校正" }
-                editInProgress = false
             }
         }
     }
     val redoRevision: () -> Unit = {
         val capturedPracticeVersion = activePracticeVersion
         val captured = (state as? WorkspaceLoadState.Ready)?.session
-        if (captured != null) {
+        if (captured != null && editGate.tryEnter()) {
+            editInProgress = true
+            editError = null
             scope.launch {
-                editInProgress = true
-                editError = null
-                runCatching {
-                    if (capturedPracticeVersion != null) {
-                        practiceVersionRepository.redo(capturedPracticeVersion)
-                    } else {
-                        repository.redo(captured)
-                    }
-                }.onSuccess { revised ->
-                    if (revised is PracticeVersionDocument) {
-                        activePracticeVersion = revised
-                        inspectedPracticeVersion = revised
-                    } else if (revised is PersistentScoreSession) {
-                        state = WorkspaceLoadState.Ready(revised)
-                        activePracticeVersion = null
-                    }
+                try {
+                    runCatching {
+                        if (capturedPracticeVersion != null) practiceVersionRepository.redo(capturedPracticeVersion)
+                        else repository.redo(captured)
+                    }.onSuccess { revised ->
+                        if (revised is PracticeVersionDocument) {
+                            activePracticeVersion = revised
+                            inspectedPracticeVersion = revised
+                        } else if (revised is PersistentScoreSession) {
+                            state = WorkspaceLoadState.Ready(revised)
+                            activePracticeVersion = null
+                        }
+                    }.onFailure { editError = it.message ?: "无法重做这次校正" }
+                } finally {
+                    editGate.leave()
+                    editInProgress = false
                 }
-                    .onFailure { editError = it.message ?: "无法重做这次校正" }
-                editInProgress = false
             }
         }
     }
@@ -582,17 +591,22 @@ fun StructuredScoreWorkspaceScreen(
                     editInProgress = editInProgress,
                     onSelect = { revisionId ->
                         val captured = activePracticeVersion ?: return@PracticeVersionRevisionHistorySheet
+                        if (!editGate.tryEnter()) return@PracticeVersionRevisionHistorySheet
+                        editInProgress = true
+                        editError = null
                         scope.launch {
-                            editInProgress = true
-                            editError = null
-                            runCatching { practiceVersionRepository.checkout(captured, revisionId) }
-                                .onSuccess {
-                                    activePracticeVersion = it
-                                    inspectedPracticeVersion = it
-                                    historyVisible = false
-                                }
-                                .onFailure { editError = it.message ?: "无法切换练习版本修订" }
-                            editInProgress = false
+                            try {
+                                runCatching { practiceVersionRepository.checkout(captured, revisionId) }
+                                    .onSuccess {
+                                        activePracticeVersion = it
+                                        inspectedPracticeVersion = it
+                                        historyVisible = false
+                                    }
+                                    .onFailure { editError = it.message ?: "无法切换练习版本修订" }
+                            } finally {
+                                editGate.leave()
+                                editInProgress = false
+                            }
                         }
                     },
                     onDismiss = { if (!editInProgress) historyVisible = false },
@@ -603,17 +617,22 @@ fun StructuredScoreWorkspaceScreen(
                     editInProgress = editInProgress,
                     onSelect = { revisionId ->
                         val captured = (state as? WorkspaceLoadState.Ready)?.session ?: return@RevisionHistorySheet
+                        if (!editGate.tryEnter()) return@RevisionHistorySheet
+                        editInProgress = true
+                        editError = null
                         scope.launch {
-                            editInProgress = true
-                            editError = null
-                            runCatching { repository.checkout(captured, revisionId) }
-                                .onSuccess {
-                                    state = WorkspaceLoadState.Ready(it)
-                                    activePracticeVersion = null
-                                    historyVisible = false
-                                }
-                                .onFailure { editError = it.message ?: "无法切换修订版本" }
-                            editInProgress = false
+                            try {
+                                runCatching { repository.checkout(captured, revisionId) }
+                                    .onSuccess {
+                                        state = WorkspaceLoadState.Ready(it)
+                                        activePracticeVersion = null
+                                        historyVisible = false
+                                    }
+                                    .onFailure { editError = it.message ?: "无法切换修订版本" }
+                            } finally {
+                                editGate.leave()
+                                editInProgress = false
+                            }
                         }
                     },
                     onDismiss = { if (!editInProgress) historyVisible = false },
@@ -666,31 +685,39 @@ fun StructuredScoreWorkspaceScreen(
                 error = practiceVersionError,
                 onCreate = { preset ->
                     val captured = (state as? WorkspaceLoadState.Ready)?.session ?: return@PracticeVersionsSheet
+                    if (!practiceVersionGate.tryEnter()) return@PracticeVersionsSheet
+                    practiceVersionBusy = true
+                    practiceVersionError = null
                     scope.launch {
-                        practiceVersionBusy = true
-                        practiceVersionError = null
-                        runCatching {
-                            practiceVersionRepository.create(
-                                captured,
-                                PracticeEditPlan(preset, selectedMeasure, playbackEndMeasure),
-                            )
-                        }.onSuccess { created ->
-                            inspectedPracticeVersion = created
-                            practiceVersions = practiceVersionRepository.list(captured.structure.id)
-                        }.onFailure {
-                            practiceVersionError = it.message ?: "当前范围无法生成这个练习版本"
+                        try {
+                            runCatching {
+                                practiceVersionRepository.create(
+                                    captured,
+                                    PracticeEditPlan(preset, selectedMeasure, playbackEndMeasure),
+                                )
+                            }.onSuccess { created ->
+                                inspectedPracticeVersion = created
+                                practiceVersions = practiceVersionRepository.list(captured.structure.id)
+                            }.onFailure { practiceVersionError = it.message ?: "当前范围无法生成这个练习版本" }
+                        } finally {
+                            practiceVersionGate.leave()
+                            practiceVersionBusy = false
                         }
-                        practiceVersionBusy = false
                     }
                 },
                 onInspect = { id ->
+                    if (!practiceVersionGate.tryEnter()) return@PracticeVersionsSheet
+                    practiceVersionBusy = true
+                    practiceVersionError = null
                     scope.launch {
-                        practiceVersionBusy = true
-                        practiceVersionError = null
-                        runCatching { practiceVersionRepository.load(id) }
-                            .onSuccess { inspectedPracticeVersion = it }
-                            .onFailure { practiceVersionError = it.message ?: "无法读取练习版本" }
-                        practiceVersionBusy = false
+                        try {
+                            runCatching { practiceVersionRepository.load(id) }
+                                .onSuccess { inspectedPracticeVersion = it }
+                                .onFailure { practiceVersionError = it.message ?: "无法读取练习版本" }
+                        } finally {
+                            practiceVersionGate.leave()
+                            practiceVersionBusy = false
+                        }
                     }
                 },
                 onPreview = { document ->
@@ -702,37 +729,57 @@ fun StructuredScoreWorkspaceScreen(
                     playbackEndMeasure = document.version.toMeasure
                 },
                 onAccept = { id ->
+                    if (!practiceVersionGate.tryEnter()) return@PracticeVersionsSheet
+                    practiceVersionBusy = true
+                    practiceVersionError = null
                     scope.launch {
-                        practiceVersionBusy = true
-                        practiceVersionError = null
-                        runCatching { practiceVersionRepository.setStatus(id, PracticeVersionStatus.Accepted) }
-                            .onSuccess { accepted ->
-                                inspectedPracticeVersion = accepted
-                                if (activePracticeVersion?.version?.id == id) activePracticeVersion = accepted
-                                practiceVersions = practiceVersionRepository.list(ready.session.structure.id)
-                            }
-                            .onFailure { practiceVersionError = it.message ?: "无法采纳练习版本" }
-                        practiceVersionBusy = false
+                        try {
+                            runCatching { practiceVersionRepository.setStatus(id, PracticeVersionStatus.Accepted) }
+                                .onSuccess { accepted ->
+                                    inspectedPracticeVersion = accepted
+                                    if (activePracticeVersion?.version?.id == id) activePracticeVersion = accepted
+                                    practiceVersions = practiceVersionRepository.list(ready.session.structure.id)
+                                }
+                                .onFailure { practiceVersionError = it.message ?: "无法采纳练习版本" }
+                        } finally {
+                            practiceVersionGate.leave()
+                            practiceVersionBusy = false
+                        }
                     }
                 },
                 onReject = { id ->
+                    if (!practiceVersionGate.tryEnter()) return@PracticeVersionsSheet
+                    practiceVersionBusy = true
+                    practiceVersionError = null
                     scope.launch {
-                        practiceVersionBusy = true
-                        practiceVersionError = null
-                        runCatching { practiceVersionRepository.setStatus(id, PracticeVersionStatus.Rejected) }
-                            .onSuccess { rejected ->
-                                inspectedPracticeVersion = rejected
-                                if (activePracticeVersion?.version?.id == id) activePracticeVersion = null
-                                practiceVersions = practiceVersionRepository.list(ready.session.structure.id)
-                            }
-                            .onFailure { practiceVersionError = it.message ?: "无法拒绝练习版本" }
-                        practiceVersionBusy = false
+                        try {
+                            runCatching { practiceVersionRepository.setStatus(id, PracticeVersionStatus.Rejected) }
+                                .onSuccess { rejected ->
+                                    inspectedPracticeVersion = rejected
+                                    if (activePracticeVersion?.version?.id == id) activePracticeVersion = null
+                                    practiceVersions = practiceVersionRepository.list(ready.session.structure.id)
+                                }
+                                .onFailure { practiceVersionError = it.message ?: "无法拒绝练习版本" }
+                        } finally {
+                            practiceVersionGate.leave()
+                            practiceVersionBusy = false
+                        }
                     }
                 },
                 onExport = { version ->
-                    exportPracticeVersionId = version.id
-                    val safeName = version.title.replace(Regex("[\\\\/:*?\"<>|]"), "-")
-                    exportPracticeVersion.launch("$safeName.musicxml")
+                    if (practiceVersionGate.tryEnter()) {
+                        practiceVersionBusy = true
+                        practiceVersionError = null
+                        exportPracticeVersionId = version.id
+                        val safeName = version.title.replace(Regex("[\\\\/:*?\"<>|]"), "-")
+                        runCatching { exportPracticeVersion.launch("$safeName.musicxml") }
+                            .onFailure {
+                                exportPracticeVersionId = null
+                                practiceVersionGate.leave()
+                                practiceVersionBusy = false
+                                practiceVersionError = it.message ?: "无法打开导出位置"
+                            }
+                    }
                 },
                 onDismiss = { if (!practiceVersionBusy) practiceVersionsVisible = false },
             )

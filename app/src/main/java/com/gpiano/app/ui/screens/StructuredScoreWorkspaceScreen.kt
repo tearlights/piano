@@ -70,6 +70,10 @@ import com.gpiano.app.data.PracticeVersion
 import com.gpiano.app.data.PracticeVersionRevision
 import com.gpiano.app.data.PracticeVersionStatus
 import com.gpiano.app.data.ScoreStructure
+import com.gpiano.app.midi.MidiPracticeTarget
+import com.gpiano.app.midi.PerformanceMatcher
+import com.gpiano.app.midi.WorkspaceMidiSession
+import com.gpiano.app.midi.WorkspaceMidiSessionState
 import com.gpiano.app.scoreworkspace.CorrectionOperation
 import com.gpiano.app.scoreworkspace.MusicXmlSummary
 import com.gpiano.app.scoreworkspace.MusicalDuration
@@ -123,6 +127,8 @@ fun StructuredScoreWorkspaceScreen(
     onChooseAnotherScore: () -> Unit,
     onOpenLibrary: () -> Unit,
     onAutoRestoreChange: (Boolean) -> Unit,
+    midiSession: WorkspaceMidiSession,
+    midiSessionState: WorkspaceMidiSessionState,
 ) {
     val context = LocalContext.current.applicationContext
     val repository = remember { StructuredScoreRepository(context) }
@@ -399,14 +405,19 @@ fun StructuredScoreWorkspaceScreen(
                         showSource = !showSource
                     },
                     onChooseAnotherScore = {
-                        playbackController.stop()
-                        correctionVisible = false
-                        playbackSettingsVisible = false
-                        guidanceVisible = false
-                        practiceVersionsVisible = false
-                        midiPracticeVisible = false
-                        aiVisible = false
-                        onChooseAnotherScore()
+                        if (midiSessionState.hasUnfinishedRecording) {
+                            midiSession.reportError("换谱前请先完成或取消本次跟弹")
+                            midiPracticeVisible = true
+                        } else {
+                            playbackController.stop()
+                            correctionVisible = false
+                            playbackSettingsVisible = false
+                            guidanceVisible = false
+                            practiceVersionsVisible = false
+                            midiPracticeVisible = false
+                            aiVisible = false
+                            onChooseAnotherScore()
+                        }
                     },
                     onSelectMeasure = {
                         if (playerState.phase == ScorePlayerPhase.Playing || playerState.phase == ScorePlayerPhase.Paused) {
@@ -504,8 +515,31 @@ fun StructuredScoreWorkspaceScreen(
                                 ),
                             )
                         }.getOrNull()
+                        midiPlan?.let { plan ->
+                            if (!midiSessionState.hasUnfinishedRecording) {
+                                runCatching {
+                                    midiSession.configure(
+                                        MidiPracticeTarget(
+                                            structureId = currentState.session.structure.id,
+                                            sourceRevisionId = activePracticeVersion?.version?.baseRevisionId
+                                                ?: currentState.session.revision.id,
+                                            practiceVersionId = activePracticeVersion?.version?.id,
+                                            plan = plan,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
                         midiPracticeVisible = true
                     },
+                    midiSessionState = midiSessionState,
+                    onOpenActiveMidiPractice = { midiPracticeVisible = true },
+                    onFinishMidiPractice = {
+                        scope.launch {
+                            if (midiSession.finishRecording() != null) midiPracticeVisible = true
+                        }
+                    },
+                    onCancelMidiPractice = midiSession::cancelRecording,
                     mainExportBusy = mainExportBusy,
                     mainExportMessage = mainExportMessage,
                     mainExportFailed = mainExportFailed,
@@ -787,7 +821,11 @@ fun StructuredScoreWorkspaceScreen(
             )
         }
         if (midiPracticeVisible && ready != null) {
-            val plan = midiPlan
+            val plan = if (midiSessionState.hasUnfinishedRecording) {
+                midiSessionState.target?.plan
+            } else {
+                midiSessionState.target?.plan ?: midiPlan
+            }
             if (plan == null) {
                 SimpleMessageSheet(
                     title = "无法开始跟弹",
@@ -796,9 +834,8 @@ fun StructuredScoreWorkspaceScreen(
                 )
             } else {
                 MidiPracticeSheet(
-                    structureId = ready.session.structure.id,
-                    sourceRevisionId = activePracticeVersion?.version?.baseRevisionId ?: ready.session.revision.id,
-                    practiceVersionId = activePracticeVersion?.version?.id,
+                    session = midiSession,
+                    sessionState = midiSessionState,
                     plan = plan,
                     onListen = {
                         playbackController.stop()
@@ -1013,6 +1050,10 @@ private fun WorkspaceContent(
     onOpenPracticeVersions: () -> Unit,
     onExitPracticeVersion: () -> Unit,
     onOpenMidiPractice: () -> Unit,
+    midiSessionState: WorkspaceMidiSessionState,
+    onOpenActiveMidiPractice: () -> Unit,
+    onFinishMidiPractice: () -> Unit,
+    onCancelMidiPractice: () -> Unit,
     mainExportBusy: Boolean,
     mainExportMessage: String?,
     mainExportFailed: Boolean,
@@ -1058,6 +1099,15 @@ private fun WorkspaceContent(
             )
         }
         HorizontalDivider()
+        if (midiSessionState.hasUnfinishedRecording) {
+            MidiPracticeControlBar(
+                state = midiSessionState,
+                onExpand = onOpenActiveMidiPractice,
+                onFinish = onFinishMidiPractice,
+                onCancel = onCancelMidiPractice,
+            )
+            HorizontalDivider()
+        }
         SelectedMeasureStatus(
             selectedMeasure = selectedMeasure,
             eventCount = selectedMeasureEventCount,
@@ -2205,6 +2255,46 @@ private fun AlphaTabView.scrollToMeasure(measure: Int) {
             .coerceAtLeast(0)
         horizontalScroll.scrollTo(targetX, 0)
         verticalScroll.scrollTo(0, targetY)
+    }
+}
+
+@Composable
+private fun MidiPracticeControlBar(
+    state: WorkspaceMidiSessionState,
+    onExpand: () -> Unit,
+    onFinish: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val plan = state.target?.plan
+    val expected = plan?.let(PerformanceMatcher::expectedAttacks)?.size ?: 0
+    val currentMeasure = plan?.selection?.startMeasure
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                state.capture.selectedDeviceName ?: "MIDI 跟弹",
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Text(
+                if (state.capture.captureInterrupted) {
+                    "设备已中断 · 已保留 ${state.capture.capturedNoteCount} 个按键"
+                } else {
+                    "第 ${currentMeasure ?: "-"} 小节 · ${state.capture.capturedNoteCount}/$expected 个按键"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (state.capture.captureInterrupted) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+        TextButton(onClick = onExpand) { Text("设置") }
+        Button(onClick = onFinish, enabled = !state.busy) { Text("完成") }
+        TextButton(onClick = onCancel, enabled = !state.busy) { Text("取消") }
     }
 }
 

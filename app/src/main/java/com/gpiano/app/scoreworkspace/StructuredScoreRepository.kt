@@ -208,6 +208,7 @@ class StructuredScoreRepository(
 
     private suspend fun loadValidSession(structure: ScoreStructure): PersistentScoreSession {
         val visited = mutableSetOf<String>()
+        var latestFailure: Throwable? = null
         var candidate = dao.findRevision(structure.currentRevisionId)
         while (candidate != null && visited.add(candidate.id)) {
             val result = runCatching { readDocument(candidate, structure.sourceKey) }
@@ -226,11 +227,17 @@ class StructuredScoreRepository(
                     recoveryMessage = if (recovered) "当前修订损坏，已恢复到最近一个有效版本" else null,
                 )
             }
+            latestFailure = result.exceptionOrNull()
             candidate = candidate.parentRevisionId?.let { dao.findRevision(it) }
         }
 
         for (fallback in dao.revisionsNewestFirst(structure.id)) {
-            val document = runCatching { readDocument(fallback, structure.sourceKey) }.getOrNull() ?: continue
+            val result = runCatching { readDocument(fallback, structure.sourceKey) }
+            val document = result.getOrNull()
+            if (document == null) {
+                latestFailure = result.exceptionOrNull()
+                continue
+            }
             val updated = structure.copy(currentRevisionId = fallback.id, updatedAt = System.currentTimeMillis())
             dao.updateStructure(updated)
             return createSession(
@@ -240,7 +247,10 @@ class StructuredScoreRepository(
                 recoveryMessage = "修订指针无效，已恢复到最近一个有效版本",
             )
         }
-        error("结构化乐谱没有可读取的 MusicXML 修订版")
+        throw IllegalStateException(
+            "结构化乐谱没有可读取的 MusicXML 修订版：${latestFailure?.message ?: "原因未知"}",
+            latestFailure,
+        )
     }
 
     private suspend fun checkoutInternal(

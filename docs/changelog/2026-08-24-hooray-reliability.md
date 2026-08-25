@@ -1,5 +1,11 @@
 # 2026-08-24 Hooray 稳定性与体验修复
 
+## Android MusicXML 练习谱加载兼容性
+
+- 修复部分 Android XML 实现不支持 JAXP `FEATURE_SECURE_PROCESSING` 时，所有结构化练习谱都被误报为“没有可读取的 MusicXML 修订版”的回归。
+- 安全处理 feature 改为平台可选能力；实体声明与内联 DTD 预检、外部实体/DTD 禁用、空实体解析器等防护继续保留。
+- 当所有候选修订确实读取失败时，错误信息会附带底层原因，避免再把解析器配置问题误诊成文件缺失。
+
 ## alphaTab 播放时间轴
 
 - 修复不规则 MusicXML 在后段小节无法试听的问题。

@@ -1,5 +1,13 @@
 # Hooray 稳定性与体验修复台账
 
+## 验收回归：Android 无法打开结构化练习谱（2026-08-25）
+
+- 现场证据：设备数据库完整性为 `ok`，当前结构、修订指针和 `structures/.../*.musicxml` 文件均一致；文件为 134702 字节的有效 MusicXML。暴露底层异常后确认 Android XML 工厂拒绝 `http://javax.xml.XMLConstants/feature/secure-processing`，不是用户数据或修订文件丢失。
+- 根因：安全解析加固把跨平台可选的 JAXP secure-processing feature 作为必选配置；桌面 JVM 支持而目标 Android 实现不支持，导致 DOM 构造前即失败。仓库随后吞掉每个候选异常，最终显示误导性的“没有可读取修订版”。
+- 修复：与其他解析器 feature 一样容错设置 secure-processing；仍通过输入预检、外部实体/参数实体禁用、外部 DTD 禁用、外部协议属性和空实体解析器形成纵深防护。结构化谱所有候选均失败时保留最后一个底层异常作为 cause 并显示原因。
+- 测试：`MusicXmlScoreParserTest` 增加“不支持可选安全 feature 不得中止配置”用例；既有内部实体拒绝、外部 DTD 不读取和真实 24 小节 MusicXML 用例继续通过。
+- 真机：在 2405CRPFDC 上保留原数据库及原修订文件覆盖安装，曲谱库点击“打开练习谱”后成功进入 `Music21 Fragment` 工作区，显示 `24 小节 · 4/4 · 修订 0`、完整五线谱、范围和试听控件。
+
 开始日期：2026-08-24  
 基线：`f2da0b516b12175e762e31f0eb1c3ce0616f4a15`  
 工作分支：`Hooray`

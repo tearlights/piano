@@ -180,7 +180,7 @@ object MusicXmlScoreParser {
             isNamespaceAware = false
             runCatching { isXIncludeAware = false }
             runCatching { isExpandEntityReferences = false }
-            setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
+            setFeatureSafely(XMLConstants.FEATURE_SECURE_PROCESSING, true)
             setFeatureSafely("http://xml.org/sax/features/external-general-entities", false)
             setFeatureSafely("http://xml.org/sax/features/external-parameter-entities", false)
             setFeatureSafely("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
@@ -192,7 +192,7 @@ object MusicXmlScoreParser {
         }
     }
 
-    private fun DocumentBuilderFactory.setFeatureSafely(name: String, value: Boolean) {
+    internal fun DocumentBuilderFactory.setFeatureSafely(name: String, value: Boolean) {
         runCatching { setFeature(name, value) }
     }
 

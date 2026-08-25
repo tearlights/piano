@@ -9,6 +9,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.nio.file.Files
+import javax.xml.parsers.DocumentBuilder
+import javax.xml.parsers.DocumentBuilderFactory
+import javax.xml.parsers.ParserConfigurationException
 
 class MusicXmlScoreParserTest {
     private lateinit var xml: String
@@ -124,6 +127,23 @@ class MusicXmlScoreParserTest {
             assertEquals(1, MusicXmlScoreParser.parse(source).events.size)
         } finally {
             Files.deleteIfExists(malformedDtd)
+        }
+    }
+
+    @Test
+    fun unsupportedOptionalSecurityFeatureDoesNotAbortParserSetup() {
+        val factory = object : DocumentBuilderFactory() {
+            override fun newDocumentBuilder(): DocumentBuilder = error("not needed")
+            override fun setAttribute(name: String, value: Any) = Unit
+            override fun getAttribute(name: String): Any = error("not needed")
+            override fun setFeature(name: String, value: Boolean) {
+                throw ParserConfigurationException(name)
+            }
+            override fun getFeature(name: String): Boolean = error("not needed")
+        }
+
+        with(MusicXmlScoreParser) {
+            factory.setFeatureSafely("unsupported-on-platform", true)
         }
     }
 

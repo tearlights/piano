@@ -32,6 +32,7 @@ import com.gpiano.app.data.PracticeAttemptInputKind
 import com.gpiano.app.midi.MatchKind
 import com.gpiano.app.midi.MidiCaptureUiState
 import com.gpiano.app.midi.MidiConnectionState
+import com.gpiano.app.midi.MidiPracticePhase
 import com.gpiano.app.midi.PerformanceMatch
 import com.gpiano.app.midi.PerformanceMatcher
 import com.gpiano.app.midi.PerformanceReport
@@ -107,7 +108,7 @@ fun MidiPracticeSheet(
             )
             OutlinedButton(
                 onClick = onListen,
-                enabled = capture.connection != MidiConnectionState.Recording && !capture.captureInterrupted,
+                enabled = !sessionState.hasUnfinishedRecording,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("先听目标片段") }
 
@@ -123,6 +124,17 @@ fun MidiPracticeSheet(
                     onTryAgain = session::clearResult,
                     onOpenCorrection = onOpenCorrection,
                 )
+            } else if (sessionState.phase == MidiPracticePhase.CountIn) {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 14.dp))
+                Text(
+                    "一小节倒计时 · ${sessionState.countInBeat ?: 1}",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text("倒计时结束后开始按固定速度时间轴记录。", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = session::cancelRecording, modifier = Modifier.padding(top = 8.dp)) {
+                    Text("取消本次")
+                }
             } else {
                 CaptureContent(
                     capture = capture,
@@ -385,7 +397,7 @@ private fun matchDescription(match: PerformanceMatch): String {
     }
 }
 
-private fun midiPitchLabel(pitch: Int): String {
+internal fun midiPitchLabel(pitch: Int): String {
     val names = arrayOf("C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B")
     return "${names[pitch % 12]}${pitch / 12 - 1}"
 }

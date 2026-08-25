@@ -42,6 +42,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -63,6 +64,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -72,6 +74,9 @@ import com.gpiano.app.data.PracticeVersionStatus
 import com.gpiano.app.data.ScoreStructure
 import com.gpiano.app.midi.MidiPracticeTarget
 import com.gpiano.app.midi.PerformanceMatcher
+import com.gpiano.app.midi.LiveFeedbackKind
+import com.gpiano.app.midi.LivePerformanceFeedback
+import com.gpiano.app.midi.MidiPracticePhase
 import com.gpiano.app.midi.WorkspaceMidiSession
 import com.gpiano.app.midi.WorkspaceMidiSessionState
 import com.gpiano.app.scoreworkspace.CorrectionOperation
@@ -1095,6 +1100,7 @@ private fun WorkspaceContent(
                 selectedMeasure = selectedMeasure,
                 playbackMeasure = playerState.currentMeasure,
                 playbackController = playbackController,
+                liveFeedback = midiSessionState.liveFeedback.takeIf { midiSessionState.hasUnfinishedRecording },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -1224,6 +1230,7 @@ private fun ScoreRenderer(
     selectedMeasure: Int,
     playbackMeasure: Int?,
     playbackController: AlphaTabPlaybackController,
+    liveFeedback: LivePerformanceFeedback? = null,
     modifier: Modifier = Modifier,
 ) {
     var renderState by remember(xml) { mutableStateOf<ScoreRenderState>(ScoreRenderState.Loading) }
@@ -1330,7 +1337,7 @@ private fun ScoreRenderer(
                     }
                 },
                 update = { view ->
-                    val targetMeasure = playbackMeasure ?: selectedMeasure
+                    val targetMeasure = liveFeedback?.currentMeasure ?: playbackMeasure ?: selectedMeasure
                     if (view.tag != targetMeasure) {
                         view.tag = targetMeasure
                         if (renderState is ScoreRenderState.Ready) view.scrollToMeasure(targetMeasure)
@@ -1339,6 +1346,7 @@ private fun ScoreRenderer(
                 onRelease = { view -> playbackController.detach(view) },
             )
         }
+        liveFeedback?.let { LiveScoreFeedbackOverlay(it) }
         when (val current = renderState) {
             ScoreRenderState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
@@ -2259,6 +2267,35 @@ private fun AlphaTabView.scrollToMeasure(measure: Int) {
 }
 
 @Composable
+private fun LiveScoreFeedbackOverlay(feedback: LivePerformanceFeedback) {
+    val visible = feedback.notes.filter { it.measureIndex == feedback.currentMeasure }.takeLast(12)
+    if (visible.isEmpty()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp)
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
+    ) {
+        visible.forEach { note ->
+            val color = when (note.kind) {
+                LiveFeedbackKind.Target -> Color(0xFFFFD54F)
+                LiveFeedbackKind.Correct -> Color(0xFF66BB6A)
+                LiveFeedbackKind.Incorrect, LiveFeedbackKind.Missing -> Color(0xFFEF5350)
+            }
+            Surface(color = color, shape = MaterialTheme.shapes.small) {
+                Text(
+                    midiPitchLabel(note.midiPitch),
+                    color = Color.Black,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun MidiPracticeControlBar(
     state: WorkspaceMidiSessionState,
     onExpand: () -> Unit,
@@ -2279,10 +2316,14 @@ private fun MidiPracticeControlBar(
                 style = MaterialTheme.typography.labelLarge,
             )
             Text(
-                if (state.capture.captureInterrupted) {
+                if (state.phase == MidiPracticePhase.CountIn) {
+                    "一小节倒计时 · ${state.countInBeat ?: 1}"
+                } else if (state.capture.captureInterrupted) {
                     "设备已中断 · 已保留 ${state.capture.capturedNoteCount} 个按键"
                 } else {
-                    "第 ${currentMeasure ?: "-"} 小节 · ${state.capture.capturedNoteCount}/$expected 个按键"
+                    val feedback = state.liveFeedback
+                    "第 ${feedback?.currentMeasure ?: currentMeasure ?: "-"} 小节 · " +
+                        "${feedback?.completedCount ?: state.capture.capturedNoteCount}/$expected"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = if (state.capture.captureInterrupted) {
@@ -2291,9 +2332,15 @@ private fun MidiPracticeControlBar(
                     MaterialTheme.colorScheme.onSurfaceVariant
                 },
             )
+            state.liveFeedback?.let { feedback ->
+                LinearProgressIndicator(
+                    progress = { feedback.progress },
+                    modifier = Modifier.fillMaxWidth().padding(top = 3.dp),
+                )
+            }
         }
         TextButton(onClick = onExpand) { Text("设置") }
-        Button(onClick = onFinish, enabled = !state.busy) { Text("完成") }
+        Button(onClick = onFinish, enabled = !state.busy && state.canFinishRecording) { Text("完成") }
         TextButton(onClick = onCancel, enabled = !state.busy) { Text("取消") }
     }
 }

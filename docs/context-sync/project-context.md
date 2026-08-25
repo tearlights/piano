@@ -45,6 +45,7 @@ Gpiano AI 是面向钢琴学习者的本地优先 Android 练习伙伴。它将�
 - 互操作：主谱与派生版可导出 MusicXML；当前选段可导出标准 SMF format 0 MIDI。
 - 工作区选择以 `WorkspaceSelectionStore` 同步保存；强制结束进程后能重新打开最近选择的结构化乐谱。
 - MIDI 连接与录制由工作区级 `WorkspaceMidiSession` 持有；设置面板收起不再释放设备，退出整个练习工作区时才完成或放弃录制并关闭设备。
+- 跟弹在一小节倒计时后按固定速度选段时间轴推进；实时状态复用最终 `PerformanceMatcher`，并在谱面上同步显示黄/绿/红反馈与当前小节。
 
 ## 已实现用户可见能力
 

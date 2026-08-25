@@ -69,10 +69,9 @@ object PerformanceMatcher {
         val quarterMillis = 60_000.0 / (plan.tempoBpm * plan.selection.speed)
         val associationTolerance = (quarterMillis * 0.75).roundToLong().coerceIn(240L, 900L)
         val rhythmTolerance = (quarterMillis * 0.20).roundToLong().coerceIn(90L, 300L)
-        val expectedOrigin = targets.minOf(PlaybackEvent::startTick)
-        val actualOrigin = performed.minOfOrNull(PerformedMidiNote::onsetNanos) ?: 0L
+        val expectedOrigin = plan.rangeStartTick
         val actual = performed.sortedWith(compareBy(PerformedMidiNote::onsetNanos, PerformedMidiNote::sequence))
-            .map { note -> TimedActual(note, (note.onsetNanos - actualOrigin) / 1_000_000L) }
+            .map { note -> TimedActual(note, note.onsetNanos / 1_000_000L) }
         val unused = actual.indices.toMutableSet()
         val result = mutableListOf<PerformanceMatch>()
 
@@ -176,7 +175,7 @@ object PerformanceMatcher {
         }
     }
 
-    private fun ticksToMillis(plan: PlaybackPlan, ticks: Long): Long =
+    internal fun ticksToMillis(plan: PlaybackPlan, ticks: Long): Long =
         (ticks * 60_000.0 / (plan.tempoBpm * plan.ticksPerQuarter) / plan.selection.speed).roundToLong()
 
     private fun percent(value: Int, total: Int): Int = if (total == 0) 0 else (value * 100.0 / total).roundToInt()

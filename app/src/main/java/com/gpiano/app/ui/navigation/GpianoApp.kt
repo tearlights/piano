@@ -231,7 +231,7 @@ fun GpianoApp() {
                             }
                         }
                     },
-                    enabled = !finishingBeforeExit,
+                    enabled = !finishingBeforeExit && midiSessionState.canFinishRecording,
                 ) { Text(if (finishingBeforeExit) "正在保存…" else "完成并离开") }
             },
             dismissButton = {

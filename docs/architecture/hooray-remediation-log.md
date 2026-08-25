@@ -30,6 +30,12 @@
 - 交互：开始跟弹后自动回到完整谱面，并显示紧凑控制栏；离开整个练习工作区时必须选择“完成并离开”“放弃本次并离开”或“留在当前页面”。空闲离开时关闭会话并释放 MIDI 设备。
 - 测试：`WorkspaceMidiSessionStateTest` 覆盖录制中、设备中断后仍需显式处理，以及仅连接设备不阻塞退出；`:app:compileDebugKotlin` 与针对性测试通过。
 
+### 跟弹实时谱面反馈
+
+- 修复：开始录制前增加一小节倒计时，随后从选段起点启动固定速度时间轴；`IncrementalPerformanceMatcher` 持续复用完整 `PerformanceMatcher` 重算当前前缀。
+- 交互：谱面随当前小节滚动，顶部覆盖层以黄色显示当前目标、绿色显示正确、红色显示节奏错误、错音、多音和已超时漏音；紧凑控制栏同步显示当前小节和时间进度。
+- 测试：新增 `IncrementalPerformanceMatcherTest`，并扩展 `PerformanceMatchingTest` 锁定固定起点下的迟到判定；针对性 JVM 测试通过。
+
 ## `GPIANO-ISSUE.md` 修复范围
 
 后续按独立可验证提交处理：

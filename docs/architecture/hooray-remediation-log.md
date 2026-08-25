@@ -42,6 +42,12 @@
 - 状态：明确拆分 `selectionStartMeasure`、`selectionEndMeasure` 与 `focusedMeasure`；所有下游练习能力继续共享同一选段，谱面只在拖动结束后跟随焦点。
 - 测试：新增 `WorkspaceMeasureSelectionTest`，覆盖 240 小节长谱边界、端点不交叉和精确内部范围；针对性测试与 Debug 构建通过。
 
+### 谱面点击更新真实选段
+
+- 修复：alphaTab 触摸坐标结合水平/垂直滚动量和屏幕密度转换到渲染内容坐标，再用 `MasterBarBounds` 命中真实小节索引并回传 Gpiano 状态。
+- 规则：普通点击第 `m` 小节后设置 `selectionStartMeasure=m`、`focusedMeasure=m`；原终点保留，只有 `m` 超过终点时才同步收敛到 `m`。校正面板打开时关闭范围点击处理。
+- 测试：`WorkspaceMeasureSelectionTest` 覆盖终点保持/收敛，`AlphaTabHitCoordinatesTest` 覆盖视口、滚动与密度换算；针对性测试和 Debug 构建通过。
+
 ## `GPIANO-ISSUE.md` 修复范围
 
 后续按独立可验证提交处理：

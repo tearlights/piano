@@ -19,4 +19,14 @@ internal data class WorkspaceMeasureSelection(
             return normalizedStart..normalizedEnd
         }
     }
+
+    fun afterScoreTap(measure: Int, measureCount: Int): WorkspaceMeasureSelection {
+        require(measureCount >= 1)
+        val tapped = measure.coerceIn(1, measureCount)
+        return copy(
+            selectionStartMeasure = tapped,
+            selectionEndMeasure = selectionEndMeasure.coerceAtLeast(tapped),
+            focusedMeasure = tapped,
+        )
+    }
 }

@@ -9,6 +9,8 @@ import alphaTab.IScrollHandler
 import alphaTab.midi.MidiTickLookupFindBeatResultCursorMode
 import alphaTab.rendering.utils.BeatBounds
 import android.util.Log
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.view.View
 import android.widget.ScrollView
 import android.widget.HorizontalScrollView
@@ -59,6 +61,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -436,6 +439,7 @@ fun StructuredScoreWorkspaceScreen(
                         selectionEndMeasure = range.last
                     },
                     onFocusMeasure = { focusedMeasure = it.coerceIn(1, displayedScore.measureCount) },
+                    scoreTapEnabled = !correctionVisible,
                     onOpenPlaybackSettings = {
                         playbackController.stop()
                         correctionVisible = false
@@ -1062,6 +1066,7 @@ private fun WorkspaceContent(
     onChooseAnotherScore: () -> Unit,
     onRangeChange: (Int, Int) -> Unit,
     onFocusMeasure: (Int) -> Unit,
+    scoreTapEnabled: Boolean,
     onOpenPlaybackSettings: () -> Unit,
     onTogglePlayback: () -> Unit,
     onStopPlayback: () -> Unit,
@@ -1119,6 +1124,16 @@ private fun WorkspaceContent(
                 playbackMeasure = playerState.currentMeasure,
                 playbackController = playbackController,
                 liveFeedback = midiSessionState.liveFeedback.takeIf { midiSessionState.hasUnfinishedRecording },
+                scoreTapEnabled = scoreTapEnabled,
+                onMeasureTap = { measure ->
+                    val next = WorkspaceMeasureSelection(
+                        selectionStartMeasure,
+                        selectionEndMeasure,
+                        focusedMeasure,
+                    ).afterScoreTap(measure, summary.measureCount)
+                    onRangeChange(next.selectionStartMeasure, next.selectionEndMeasure)
+                    onFocusMeasure(next.focusedMeasure)
+                },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -1318,9 +1333,13 @@ private fun ScoreRenderer(
     playbackMeasure: Int?,
     playbackController: AlphaTabPlaybackController,
     liveFeedback: LivePerformanceFeedback? = null,
+    scoreTapEnabled: Boolean = false,
+    onMeasureTap: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var renderState by remember(xml) { mutableStateOf<ScoreRenderState>(ScoreRenderState.Loading) }
+    val currentScoreTapEnabled = rememberUpdatedState(scoreTapEnabled)
+    val currentOnMeasureTap = rememberUpdatedState(onMeasureTap)
     Box(modifier = modifier.fillMaxSize()) {
         key(xml) {
             AndroidView(
@@ -1328,6 +1347,25 @@ private fun ScoreRenderer(
                 factory = { viewContext ->
                     AlphaTabView(viewContext, null).apply {
                         var loadStarted = false
+                        val tapDetector = GestureDetector(
+                            viewContext,
+                            object : GestureDetector.SimpleOnGestureListener() {
+                                override fun onDown(event: MotionEvent): Boolean = true
+
+                                override fun onSingleTapUp(event: MotionEvent): Boolean {
+                                    if (!currentScoreTapEnabled.value) return false
+                                    hitTestMeasure(event.rawX, event.rawY, score.measureCount)?.let {
+                                        currentOnMeasureTap.value(it)
+                                        return true
+                                    }
+                                    return false
+                                }
+                            },
+                        )
+                        findViewById<View>(AlphaTabR.id.innerScroll)?.setOnTouchListener { _, event ->
+                            tapDetector.onTouchEvent(event)
+                            false
+                        }
                         settings.player.enableCursor = true
                         settings.player.enableElementHighlighting = true
                         settings.player.configureGpianoScrolling()
@@ -2404,6 +2442,27 @@ private fun AlphaTabView.scrollToMeasure(measure: Int) {
         horizontalScroll.scrollTo(targetX, 0)
         verticalScroll.scrollTo(0, targetY)
     }
+}
+
+@OptIn(ExperimentalContracts::class, ExperimentalUnsignedTypes::class)
+private fun AlphaTabView.hitTestMeasure(rawX: Float, rawY: Float, measureCount: Int): Int? {
+    val lookup = api.boundsLookup ?: return null
+    val verticalScroll = findViewById<ScrollView>(AlphaTabR.id.innerScroll) ?: return null
+    val horizontalScroll = findViewById<HorizontalScrollView>(AlphaTabR.id.outerScroll) ?: return null
+    val density = resources.displayMetrics.density
+    val viewportLocation = IntArray(2)
+    getLocationOnScreen(viewportLocation)
+    val contentX = AlphaTabHitCoordinates.toContent(rawX, viewportLocation[0], horizontalScroll.scrollX, density)
+    val contentY = AlphaTabHitCoordinates.toContent(rawY, viewportLocation[1], verticalScroll.scrollY, density)
+    for (index in 0 until measureCount) {
+        val bounds = lookup.findMasterBarByIndex(index.toDouble()) ?: continue
+        val xBounds = bounds.visualBounds
+        val yBounds = bounds.lineAlignedBounds
+        val insideX = contentX >= xBounds.x && contentX <= xBounds.x + xBounds.w
+        val insideY = contentY >= yBounds.y && contentY <= yBounds.y + yBounds.h
+        if (insideX && insideY) return index + 1
+    }
+    return lookup.getBeatAtPos(contentX, contentY)?.voice?.bar?.masterBar?.index?.toInt()?.plus(1)
 }
 
 @Composable

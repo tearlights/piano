@@ -34,7 +34,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -45,6 +44,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -146,7 +146,8 @@ fun StructuredScoreWorkspaceScreen(
     var availableStructures by remember { mutableStateOf<List<ScoreStructure>>(emptyList()) }
     var structureListLoading by remember { mutableStateOf(false) }
     var structureListError by remember { mutableStateOf<String?>(null) }
-    var selectedMeasure by rememberSaveable(structureId) { mutableIntStateOf(1) }
+    var selectionStartMeasure by rememberSaveable(structureId) { mutableIntStateOf(1) }
+    var focusedMeasure by rememberSaveable(structureId) { mutableIntStateOf(1) }
     var correctionVisible by rememberSaveable(structureId) { mutableStateOf(false) }
     var historyVisible by remember { mutableStateOf(false) }
     var guidanceVisible by remember { mutableStateOf(false) }
@@ -156,7 +157,7 @@ fun StructuredScoreWorkspaceScreen(
     var midiPlan by remember { mutableStateOf<PlaybackPlan?>(null) }
     var showSource by remember(structureId) { mutableStateOf(false) }
     var playbackSettingsVisible by remember { mutableStateOf(false) }
-    var playbackEndMeasure by rememberSaveable(structureId) { mutableIntStateOf(1) }
+    var selectionEndMeasure by rememberSaveable(structureId) { mutableIntStateOf(1) }
     var playbackSpeed by rememberSaveable(structureId) { mutableStateOf(0.75) }
     var playbackHand by rememberSaveable(structureId) { mutableStateOf(PlaybackHand.Both) }
     var playbackLooping by rememberSaveable(structureId) { mutableStateOf(false) }
@@ -354,8 +355,9 @@ fun StructuredScoreWorkspaceScreen(
         state = runCatching { repository.open(structureId) }
             .fold(
                 onSuccess = {
-                    selectedMeasure = 1
-                    playbackEndMeasure = 1
+                    selectionStartMeasure = 1
+                    selectionEndMeasure = 1
+                    focusedMeasure = 1
                     activePracticeVersion = null
                     showSource = false
                     WorkspaceLoadState.Ready(it)
@@ -394,8 +396,9 @@ fun StructuredScoreWorkspaceScreen(
                 WorkspaceContent(
                     session = currentState.session,
                     practiceVersion = activePracticeVersion,
-                    selectedMeasure = selectedMeasure,
-                    playbackEndMeasure = playbackEndMeasure,
+                    selectionStartMeasure = selectionStartMeasure,
+                    selectionEndMeasure = selectionEndMeasure,
+                    focusedMeasure = focusedMeasure,
                     playerState = playerState,
                     playbackController = playbackController,
                     showSource = showSource,
@@ -424,13 +427,15 @@ fun StructuredScoreWorkspaceScreen(
                             onChooseAnotherScore()
                         }
                     },
-                    onSelectMeasure = {
+                    onRangeChange = { start, end ->
                         if (playerState.phase == ScorePlayerPhase.Playing || playerState.phase == ScorePlayerPhase.Paused) {
                             playbackController.stop()
                         }
-                        selectedMeasure = it
-                        playbackEndMeasure = it
+                        val range = WorkspaceMeasureSelection.normalizeRange(start, end, displayedScore.measureCount)
+                        selectionStartMeasure = range.first
+                        selectionEndMeasure = range.last
                     },
+                    onFocusMeasure = { focusedMeasure = it.coerceIn(1, displayedScore.measureCount) },
                     onOpenPlaybackSettings = {
                         playbackController.stop()
                         correctionVisible = false
@@ -448,8 +453,8 @@ fun StructuredScoreWorkspaceScreen(
                                 PlaybackPlanCompiler.compile(
                                     displayedScore,
                                     PlaybackSelection(
-                                        startMeasure = selectedMeasure,
-                                        endMeasure = playbackEndMeasure,
+                                        startMeasure = selectionStartMeasure,
+                                        endMeasure = selectionEndMeasure,
                                         hand = playbackHand,
                                         speed = playbackSpeed,
                                         looping = playbackLooping,
@@ -466,7 +471,7 @@ fun StructuredScoreWorkspaceScreen(
                         practiceVersionsVisible = false
                         midiPracticeVisible = false
                         aiVisible = false
-                        selectedEventId = displayedScore.eventsInMeasure(selectedMeasure).firstOrNull()?.id
+                        selectedEventId = displayedScore.eventsInMeasure(focusedMeasure).firstOrNull()?.id
                         editError = null
                         correctionVisible = true
                     },
@@ -512,8 +517,8 @@ fun StructuredScoreWorkspaceScreen(
                             PlaybackPlanCompiler.compile(
                                 displayedScore,
                                 PlaybackSelection(
-                                    startMeasure = selectedMeasure,
-                                    endMeasure = playbackEndMeasure,
+                                    startMeasure = selectionStartMeasure,
+                                    endMeasure = selectionEndMeasure,
                                     hand = playbackHand,
                                     speed = playbackSpeed,
                                     looping = false,
@@ -569,15 +574,21 @@ fun StructuredScoreWorkspaceScreen(
         if (playbackSettingsVisible && ready != null) {
             PlaybackSettingsSheet(
                 score = displayedScore ?: ready.session.score,
-                startMeasure = selectedMeasure,
-                endMeasure = playbackEndMeasure,
+                startMeasure = selectionStartMeasure,
+                endMeasure = selectionEndMeasure,
                 speed = playbackSpeed,
                 hand = playbackHand,
                 looping = playbackLooping,
                 onRangeChange = { start, end ->
-                    selectedMeasure = start.coerceIn(1, (displayedScore ?: ready.session.score).measureCount)
-                    playbackEndMeasure = end.coerceIn(selectedMeasure, (displayedScore ?: ready.session.score).measureCount)
+                    val range = WorkspaceMeasureSelection.normalizeRange(
+                        start,
+                        end,
+                        (displayedScore ?: ready.session.score).measureCount,
+                    )
+                    selectionStartMeasure = range.first
+                    selectionEndMeasure = range.last
                 },
+                onRangeChangeFinished = { focusedMeasure = it },
                 onSpeedChange = { playbackSpeed = it },
                 onHandChange = { playbackHand = it },
                 onLoopingChange = { playbackLooping = it },
@@ -606,7 +617,7 @@ fun StructuredScoreWorkspaceScreen(
             val correctionScore = correctionPracticeVersion?.score ?: ready.session.score
             CorrectionSheet(
                 score = correctionScore,
-                measureIndex = selectedMeasure,
+                measureIndex = focusedMeasure,
                 revisionNumber = correctionPracticeVersion?.revisionNumber ?: ready.session.revisionNumber,
                 selectedEventId = selectedEventId,
                 editInProgress = editInProgress,
@@ -683,11 +694,11 @@ fun StructuredScoreWorkspaceScreen(
         if (guidanceVisible && ready != null) {
             val guidanceScore = displayedScore ?: ready.session.score
             val guidanceXml = activePracticeVersion?.document?.xml ?: ready.session.xml
-            val analysis = remember(guidanceXml, selectedMeasure, playbackEndMeasure) {
+            val analysis = remember(guidanceXml, selectionStartMeasure, selectionEndMeasure) {
                 ScorePracticeAnalyzer.analyze(
                     guidanceScore,
-                    selectedMeasure,
-                    playbackEndMeasure.coerceAtLeast(selectedMeasure),
+                    selectionStartMeasure,
+                    selectionEndMeasure.coerceAtLeast(selectionStartMeasure),
                 )
             }
             PracticeGuidanceSheet(
@@ -700,8 +711,8 @@ fun StructuredScoreWorkspaceScreen(
                         PlaybackPlanCompiler.compile(
                             guidanceScore,
                             PlaybackSelection(
-                                startMeasure = selectedMeasure,
-                                endMeasure = playbackEndMeasure,
+                                startMeasure = selectionStartMeasure,
+                                endMeasure = selectionEndMeasure,
                                 hand = recommendation.hand,
                                 speed = recommendation.speed,
                                 looping = recommendation.looping,
@@ -718,8 +729,8 @@ fun StructuredScoreWorkspaceScreen(
         }
         if (practiceVersionsVisible && ready != null) {
             PracticeVersionsSheet(
-                fromMeasure = selectedMeasure,
-                toMeasure = playbackEndMeasure,
+                fromMeasure = selectionStartMeasure,
+                toMeasure = selectionEndMeasure,
                 versions = practiceVersions,
                 inspected = inspectedPracticeVersion,
                 busy = practiceVersionBusy,
@@ -734,7 +745,7 @@ fun StructuredScoreWorkspaceScreen(
                             runCatching {
                                 practiceVersionRepository.create(
                                     captured,
-                                    PracticeEditPlan(preset, selectedMeasure, playbackEndMeasure),
+                                    PracticeEditPlan(preset, selectionStartMeasure, selectionEndMeasure),
                                 )
                             }.onSuccess { created ->
                                 inspectedPracticeVersion = created
@@ -766,8 +777,9 @@ fun StructuredScoreWorkspaceScreen(
                     activePracticeVersion = document
                     practiceVersionsVisible = false
                     showSource = false
-                    selectedMeasure = document.version.fromMeasure
-                    playbackEndMeasure = document.version.toMeasure
+                    selectionStartMeasure = document.version.fromMeasure
+                    selectionEndMeasure = document.version.toMeasure
+                    focusedMeasure = document.version.fromMeasure
                 },
                 onAccept = { id ->
                     if (!practiceVersionGate.tryEnter()) return@PracticeVersionsSheet
@@ -850,7 +862,8 @@ fun StructuredScoreWorkspaceScreen(
                     onOpenCorrection = {
                         midiPracticeVisible = false
                         activePracticeVersion = null
-                        selectedEventId = ready.session.score.eventsInMeasure(selectedMeasure).firstOrNull()?.id
+                        focusedMeasure = selectionStartMeasure
+                        selectedEventId = ready.session.score.eventsInMeasure(focusedMeasure).firstOrNull()?.id
                         editError = null
                         correctionVisible = true
                     },
@@ -863,19 +876,19 @@ fun StructuredScoreWorkspaceScreen(
         }
         if (aiVisible && ready != null) {
             val aiScore = displayedScore ?: ready.session.score
-            val analysis = remember(aiScore, selectedMeasure, playbackEndMeasure) {
+            val analysis = remember(aiScore, selectionStartMeasure, selectionEndMeasure) {
                 ScorePracticeAnalyzer.analyze(
                     aiScore,
-                    selectedMeasure,
-                    playbackEndMeasure.coerceAtLeast(selectedMeasure),
+                    selectionStartMeasure,
+                    selectionEndMeasure.coerceAtLeast(selectionStartMeasure),
                 )
             }
             PracticeAiSheet(
                 score = aiScore,
                 analysis = analysis,
                 selection = PlaybackSelection(
-                    startMeasure = selectedMeasure,
-                    endMeasure = playbackEndMeasure,
+                    startMeasure = selectionStartMeasure,
+                    endMeasure = selectionEndMeasure,
                     hand = playbackHand,
                     speed = playbackSpeed,
                     looping = playbackLooping,
@@ -888,8 +901,8 @@ fun StructuredScoreWorkspaceScreen(
                         PlaybackPlanCompiler.compile(
                             aiScore,
                             PlaybackSelection(
-                                selectedMeasure,
-                                playbackEndMeasure,
+                                selectionStartMeasure,
+                                selectionEndMeasure,
                                 recommendation.hand,
                                 recommendation.speed,
                                 recommendation.looping,
@@ -901,7 +914,7 @@ fun StructuredScoreWorkspaceScreen(
                     { preset ->
                         val created = practiceVersionRepository.create(
                             ready.session,
-                            PracticeEditPlan(preset, selectedMeasure, playbackEndMeasure),
+                            PracticeEditPlan(preset, selectionStartMeasure, selectionEndMeasure),
                         )
                         inspectedPracticeVersion = created
                         practiceVersions = practiceVersionRepository.list(ready.session.structure.id)
@@ -1039,14 +1052,16 @@ private fun FailedWorkspace(message: String) {
 private fun WorkspaceContent(
     session: PersistentScoreSession,
     practiceVersion: PracticeVersionDocument?,
-    selectedMeasure: Int,
-    playbackEndMeasure: Int,
+    selectionStartMeasure: Int,
+    selectionEndMeasure: Int,
+    focusedMeasure: Int,
     playerState: ScorePlayerUiState,
     playbackController: AlphaTabPlaybackController,
     showSource: Boolean,
     onToggleSource: () -> Unit,
     onChooseAnotherScore: () -> Unit,
-    onSelectMeasure: (Int) -> Unit,
+    onRangeChange: (Int, Int) -> Unit,
+    onFocusMeasure: (Int) -> Unit,
     onOpenPlaybackSettings: () -> Unit,
     onTogglePlayback: () -> Unit,
     onStopPlayback: () -> Unit,
@@ -1070,8 +1085,8 @@ private fun WorkspaceContent(
     val displayedDocument = practiceVersion?.document ?: session.document
     val displayedScore = displayedDocument.score
     val summary = displayedDocument.summary
-    val selectedMeasureEventCount = remember(displayedScore, selectedMeasure) {
-        displayedScore.eventsInMeasure(selectedMeasure).size
+    val focusedMeasureEventCount = remember(displayedScore, focusedMeasure) {
+        displayedScore.eventsInMeasure(focusedMeasure).size
     }
     Column(modifier = Modifier.fillMaxSize()) {
         ScoreMetadata(
@@ -1084,11 +1099,14 @@ private fun WorkspaceContent(
             onChooseAnotherScore = onChooseAnotherScore,
             onOpenHistory = onOpenHistory,
         )
-        MeasureSelector(
+        MeasureRangeSelector(
             measureCount = summary.measureCount,
-            selectedMeasure = selectedMeasure,
+            selectionStartMeasure = selectionStartMeasure,
+            selectionEndMeasure = selectionEndMeasure,
+            focusedMeasure = focusedMeasure,
             playbackMeasure = playerState.currentMeasure,
-            onSelectMeasure = onSelectMeasure,
+            onRangeChange = onRangeChange,
+            onFocusMeasure = onFocusMeasure,
         )
         HorizontalDivider()
         if (showSource && session.sourcePage != null) {
@@ -1097,7 +1115,7 @@ private fun WorkspaceContent(
             ScoreRenderer(
                 xml = displayedDocument.xml,
                 score = displayedScore,
-                selectedMeasure = selectedMeasure,
+                focusedMeasure = focusedMeasure,
                 playbackMeasure = playerState.currentMeasure,
                 playbackController = playbackController,
                 liveFeedback = midiSessionState.liveFeedback.takeIf { midiSessionState.hasUnfinishedRecording },
@@ -1115,10 +1133,11 @@ private fun WorkspaceContent(
             HorizontalDivider()
         }
         SelectedMeasureStatus(
-            selectedMeasure = selectedMeasure,
-            eventCount = selectedMeasureEventCount,
+            focusedMeasure = focusedMeasure,
+            selectionStartMeasure = selectionStartMeasure,
+            eventCount = focusedMeasureEventCount,
             statusMessage = practiceVersion?.recoveryMessage ?: session.recoveryMessage,
-            playbackEndMeasure = playbackEndMeasure,
+            selectionEndMeasure = selectionEndMeasure,
             playerState = playerState,
             canUndo = practiceVersion?.canUndo ?: session.canUndo,
             canRedo = practiceVersion?.canRedo ?: session.canRedo,
@@ -1196,28 +1215,96 @@ private fun OriginalScoreView(source: SourceScorePage, modifier: Modifier = Modi
 }
 
 @Composable
-private fun MeasureSelector(
+private fun MeasureRangeSelector(
     measureCount: Int,
-    selectedMeasure: Int,
+    selectionStartMeasure: Int,
+    selectionEndMeasure: Int,
+    focusedMeasure: Int,
     playbackMeasure: Int?,
-    onSelectMeasure: (Int) -> Unit,
+    onRangeChange: (Int, Int) -> Unit,
+    onFocusMeasure: (Int) -> Unit,
 ) {
-    LazyRow(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        items((1..measureCount).toList(), key = { it }) { measure ->
-            AssistChip(
-                onClick = { onSelectMeasure(measure) },
-                label = { Text("第 $measure 小节") },
-                leadingIcon = when (measure) {
-                    playbackMeasure -> ({ Text("▶") })
-                    selectedMeasure -> ({ Text("●") })
-                    else -> null
+    var pendingFocus by remember { mutableIntStateOf(selectionStartMeasure) }
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text("起点", style = MaterialTheme.typography.labelMedium)
+            TextButton(
+                onClick = {
+                    val next = (selectionStartMeasure - 1).coerceAtLeast(1)
+                    onRangeChange(next, selectionEndMeasure)
+                    onFocusMeasure(next)
                 },
+                enabled = selectionStartMeasure > 1,
+            ) { Text("−") }
+            Text("$selectionStartMeasure", style = MaterialTheme.typography.titleMedium)
+            TextButton(
+                onClick = {
+                    val next = (selectionStartMeasure + 1).coerceAtMost(selectionEndMeasure)
+                    onRangeChange(next, selectionEndMeasure)
+                    onFocusMeasure(next)
+                },
+                enabled = selectionStartMeasure < selectionEndMeasure,
+            ) { Text("+") }
+            Spacer(Modifier.weight(1f))
+            Text("终点", style = MaterialTheme.typography.labelMedium)
+            TextButton(
+                onClick = {
+                    val next = (selectionEndMeasure - 1).coerceAtLeast(selectionStartMeasure)
+                    onRangeChange(selectionStartMeasure, next)
+                    onFocusMeasure(next)
+                },
+                enabled = selectionEndMeasure > selectionStartMeasure,
+            ) { Text("−") }
+            Text("$selectionEndMeasure", style = MaterialTheme.typography.titleMedium)
+            TextButton(
+                onClick = {
+                    val next = (selectionEndMeasure + 1).coerceAtMost(measureCount)
+                    onRangeChange(selectionStartMeasure, next)
+                    onFocusMeasure(next)
+                },
+                enabled = selectionEndMeasure < measureCount,
+            ) { Text("+") }
+        }
+        if (measureCount > 1) {
+            RangeSlider(
+                value = selectionStartMeasure.toFloat()..selectionEndMeasure.toFloat(),
+                onValueChange = { range ->
+                    val start = range.start.roundToInt().coerceIn(1, measureCount)
+                    val end = range.endInclusive.roundToInt().coerceIn(start, measureCount)
+                    pendingFocus = if (start != selectionStartMeasure) start else end
+                    onRangeChange(start, end)
+                },
+                onValueChangeFinished = { onFocusMeasure(pendingFocus) },
+                valueRange = 1f..measureCount.toFloat(),
+                modifier = Modifier.fillMaxWidth(),
             )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                playbackMeasure?.let { "正在播放第 $it 小节" } ?: "查看第 $focusedMeasure 小节",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(
+                onClick = {
+                    onRangeChange(focusedMeasure, focusedMeasure)
+                    onFocusMeasure(focusedMeasure)
+                },
+            ) { Text("当前小节") }
+            TextButton(
+                onClick = {
+                    onRangeChange(1, measureCount)
+                    onFocusMeasure(1)
+                },
+            ) { Text("全篇") }
         }
     }
 }
@@ -1227,7 +1314,7 @@ private fun MeasureSelector(
 private fun ScoreRenderer(
     xml: String,
     score: ScoreIr,
-    selectedMeasure: Int,
+    focusedMeasure: Int,
     playbackMeasure: Int?,
     playbackController: AlphaTabPlaybackController,
     liveFeedback: LivePerformanceFeedback? = null,
@@ -1337,7 +1424,7 @@ private fun ScoreRenderer(
                     }
                 },
                 update = { view ->
-                    val targetMeasure = liveFeedback?.currentMeasure ?: playbackMeasure ?: selectedMeasure
+                    val targetMeasure = liveFeedback?.currentMeasure ?: playbackMeasure ?: focusedMeasure
                     if (view.tag != targetMeasure) {
                         view.tag = targetMeasure
                         if (renderState is ScoreRenderState.Ready) view.scrollToMeasure(targetMeasure)
@@ -1364,10 +1451,11 @@ private fun ScoreRenderer(
 
 @Composable
 private fun SelectedMeasureStatus(
-    selectedMeasure: Int,
+    focusedMeasure: Int,
+    selectionStartMeasure: Int,
     eventCount: Int,
     statusMessage: String?,
-    playbackEndMeasure: Int,
+    selectionEndMeasure: Int,
     playerState: ScorePlayerUiState,
     canUndo: Boolean,
     canRedo: Boolean,
@@ -1396,7 +1484,7 @@ private fun SelectedMeasureStatus(
         ) {
             if (showSource) {
                 Text(
-                    "原谱对照 · 第 $selectedMeasure 小节",
+                    "原谱对照 · 第 $focusedMeasure 小节",
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1407,7 +1495,7 @@ private fun SelectedMeasureStatus(
             if (practiceVersion != null) {
                 Text(
                     statusMessage ?: playerState.error ?: playerState.currentMeasure?.let { "派生版播放第 $it 小节" }
-                    ?: "${practiceVersionStatusLabel(practiceVersion.status)} · 第 $selectedMeasure 小节",
+                    ?: "${practiceVersionStatusLabel(practiceVersion.status)} · 第 $focusedMeasure 小节",
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1421,7 +1509,7 @@ private fun SelectedMeasureStatus(
                     TextButton(onClick = onOpenGuidance) { Text("指导") }
                     TextButton(onClick = onOpenMidiPractice) { Text("跟弹") }
                     TextButton(onClick = onOpenPlaybackSettings) {
-                        Text(if (selectedMeasure == playbackEndMeasure) "范围" else "$selectedMeasure–$playbackEndMeasure")
+                        Text(if (selectionStartMeasure == selectionEndMeasure) "范围" else "$selectionStartMeasure–$selectionEndMeasure")
                     }
                     if (playerState.phase == ScorePlayerPhase.Playing || playerState.phase == ScorePlayerPhase.Paused) {
                         TextButton(onClick = onStopPlayback) { Text("停止") }
@@ -1441,7 +1529,7 @@ private fun SelectedMeasureStatus(
             }
             Text(
                 mainExportMessage ?: statusMessage ?: playerState.error ?: playerState.currentMeasure?.let { "播放第 $it 小节" }
-                ?: "第 $selectedMeasure 小节 · $eventCount 个事件",
+                ?: "第 $focusedMeasure 小节 · $eventCount 个事件",
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodySmall,
                 color = if (mainExportFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1459,7 +1547,7 @@ private fun SelectedMeasureStatus(
                     Text(if (mainExportBusy) "导出中" else "导出")
                 }
                 TextButton(onClick = onOpenPlaybackSettings) {
-                    Text(if (selectedMeasure == playbackEndMeasure) "范围" else "$selectedMeasure–$playbackEndMeasure")
+                    Text(if (selectionStartMeasure == selectionEndMeasure) "范围" else "$selectionStartMeasure–$selectionEndMeasure")
                 }
                 if (playerState.phase == ScorePlayerPhase.Playing || playerState.phase == ScorePlayerPhase.Paused) {
                     TextButton(onClick = onStopPlayback) { Text("停止") }
@@ -1616,6 +1704,7 @@ private fun PlaybackSettingsSheet(
     hand: PlaybackHand,
     looping: Boolean,
     onRangeChange: (Int, Int) -> Unit,
+    onRangeChangeFinished: (Int) -> Unit,
     onSpeedChange: (Double) -> Unit,
     onHandChange: (PlaybackHand) -> Unit,
     onLoopingChange: (Boolean) -> Unit,
@@ -1626,6 +1715,7 @@ private fun PlaybackSettingsSheet(
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var pendingRangeFocus by remember { mutableIntStateOf(startMeasure) }
     val plan = remember(score, startMeasure, endMeasure, speed, hand, looping) {
         runCatching {
             PlaybackPlanCompiler.compile(
@@ -1667,21 +1757,71 @@ private fun PlaybackSettingsSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("从第 $startMeasure 小节到第 $endMeasure 小节", modifier = Modifier.weight(1f))
-                TextButton(onClick = { onRangeChange(startMeasure, startMeasure) }) { Text("当前小节") }
-                TextButton(onClick = { onRangeChange(1, score.measureCount) }) { Text("全篇") }
+                TextButton(
+                    onClick = {
+                        onRangeChange(startMeasure, startMeasure)
+                        onRangeChangeFinished(startMeasure)
+                    },
+                ) { Text("当前小节") }
+                TextButton(
+                    onClick = {
+                        onRangeChange(1, score.measureCount)
+                        onRangeChangeFinished(1)
+                    },
+                ) { Text("全篇") }
             }
-            RangeMeasurePicker(
-                label = "起点",
-                measures = 1..score.measureCount,
-                selected = startMeasure,
-                onSelect = { start -> onRangeChange(start, endMeasure.coerceAtLeast(start)) },
-            )
-            RangeMeasurePicker(
-                label = "终点",
-                measures = startMeasure..score.measureCount,
-                selected = endMeasure,
-                onSelect = { end -> onRangeChange(startMeasure, end) },
-            )
+            if (score.measureCount > 1) {
+                RangeSlider(
+                    value = startMeasure.toFloat()..endMeasure.toFloat(),
+                    onValueChange = { range ->
+                        val start = range.start.roundToInt().coerceIn(1, score.measureCount)
+                        val end = range.endInclusive.roundToInt().coerceIn(start, score.measureCount)
+                        pendingRangeFocus = if (start != startMeasure) start else end
+                        onRangeChange(start, end)
+                    },
+                    onValueChangeFinished = { onRangeChangeFinished(pendingRangeFocus) },
+                    valueRange = 1f..score.measureCount.toFloat(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                TextButton(
+                    onClick = {
+                        val next = (startMeasure - 1).coerceAtLeast(1)
+                        onRangeChange(next, endMeasure)
+                        onRangeChangeFinished(next)
+                    },
+                    enabled = startMeasure > 1,
+                ) { Text("起点 −") }
+                TextButton(
+                    onClick = {
+                        val next = (startMeasure + 1).coerceAtMost(endMeasure)
+                        onRangeChange(next, endMeasure)
+                        onRangeChangeFinished(next)
+                    },
+                    enabled = startMeasure < endMeasure,
+                ) { Text("起点 +") }
+                TextButton(
+                    onClick = {
+                        val next = (endMeasure - 1).coerceAtLeast(startMeasure)
+                        onRangeChange(startMeasure, next)
+                        onRangeChangeFinished(next)
+                    },
+                    enabled = endMeasure > startMeasure,
+                ) { Text("终点 −") }
+                TextButton(
+                    onClick = {
+                        val next = (endMeasure + 1).coerceAtMost(score.measureCount)
+                        onRangeChange(startMeasure, next)
+                        onRangeChangeFinished(next)
+                    },
+                    enabled = endMeasure < score.measureCount,
+                ) { Text("终点 +") }
+            }
 
             Text("速度", modifier = Modifier.padding(top = 10.dp), style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2367,28 +2507,6 @@ private fun AlphaTabView.stabilizeGpianoLazyRendering() {
         if (x < oldX) {
             renderSurface.removeCallbacks(restoreVisibleParts)
             renderSurface.postDelayed(restoreVisibleParts, 80L)
-        }
-    }
-}
-
-@Composable
-private fun RangeMeasurePicker(
-    label: String,
-    measures: IntRange,
-    selected: Int,
-    onSelect: (Int) -> Unit,
-) {
-    Text(label, modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.labelMedium)
-    LazyRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        items(measures.toList(), key = { "$label-$it" }) { measure ->
-            FilterChip(
-                selected = measure == selected,
-                onClick = { onSelect(measure) },
-                label = { Text(measure.toString()) },
-            )
         }
     }
 }

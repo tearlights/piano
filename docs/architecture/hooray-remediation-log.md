@@ -36,6 +36,12 @@
 - 交互：谱面随当前小节滚动，顶部覆盖层以黄色显示当前目标、绿色显示正确、红色显示节奏错误、错音、多音和已超时漏音；紧凑控制栏同步显示当前小节和时间进度。
 - 测试：新增 `IncrementalPerformanceMatcherTest`，并扩展 `PerformanceMatchingTest` 锁定固定起点下的迟到判定；针对性 JVM 测试通过。
 
+### 双头小节选段
+
+- 修复：顶部横向小节 Chip 列表替换为 Material 3 `RangeSlider`，同时显示精确起止数字、两端 `− / +` 精调、“当前小节”和“全篇”。试听设置面板同步使用双头滑块。
+- 状态：明确拆分 `selectionStartMeasure`、`selectionEndMeasure` 与 `focusedMeasure`；所有下游练习能力继续共享同一选段，谱面只在拖动结束后跟随焦点。
+- 测试：新增 `WorkspaceMeasureSelectionTest`，覆盖 240 小节长谱边界、端点不交叉和精确内部范围；针对性测试与 Debug 构建通过。
+
 ## `GPIANO-ISSUE.md` 修复范围
 
 后续按独立可验证提交处理：

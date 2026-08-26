@@ -261,3 +261,8 @@
 - 播放修复：MusicXML 未提供 `midi-channel` 时，多个 part 可能共享 alphaTab 默认声道；`changeTrackMute` 实际按声道静音，会把另一只手一起静音。送入播放器前为重复声道分配独立 channel，再按左右手筛选 track。切换手别、速度、循环或范围时清理旧 playback plan，避免暂停/继续沿用上一种手别。
 - 谱面修复：alphaTab 在 placeholder layout dirty 时会忽略滚动事件。底部回滑改为先请求一次布局，再在 `OnPreDraw` 中转发最新滚动偏移，补回被忽略的 delta；移除 140/520ms 两阶段定时重绘。
 - 验证：Android JVM 测试与 Debug 编译通过；真机仍需分别试听左右手并复测到达底部后的上滑路径。
+### 触底后回滑仍白屏：重建 alphaTab lazy partial 缓存（2026-08-26）
+
+- 现象：未触底时任意上下滑动正常；一旦到达垂直滚动底部，向上回滑只剩底部当前页，之前页不再绘制。
+- 根因：alphaTab 的 `AlphaTabRenderSurface` 在 layout dirty 时会丢弃滚动 delta，同时已回收的 lazy partial bitmap 不会重新进入完整可见分片状态。
+- 修复：检测“触底→向上”的边沿，调用 alphaTab 公共 `api.render(null)` 重建 lazy partial 缓存；完成回调不再把滚动位置跳回焦点小节。普通滚动仍使用布局后的偏移转发，不再叠加定时重绘。

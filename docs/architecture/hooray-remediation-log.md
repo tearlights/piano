@@ -236,6 +236,17 @@
 
 ## 最终语义审计结论
 
+### 顶部选段控件侵占谱面空间
+
+- 修复：起点、终点、双头 `RangeSlider`、当前/全篇快捷操作与查看状态压缩到同一行，固定高度 40dp；端点 `− / +` 使用 28dp 紧凑按钮。
+- 修复：起点与终点在同一点时仍可分别向外调整，避免精调按钮全部失效造成范围状态混乱。
+- 验证：2405CRPFDC 真机显示 24 小节完整谱面，控件单行位于谱面上方；Android JVM 72 项测试与 Debug 构建通过。
+
+### 谱面点击误触与不显示
+
+- 修复：点击监听改为 Activity 级观察桥，不消费 alphaTab 滚动事件；命中计算增加 alphaTab 视口边界，底部导航和控制栏点击不会再被当作小节点击。
+- 验证：真机谱面实际渲染，点击及滚动后仍保持可见；坐标换算和视口边界均有单元测试。
+
 - 小节容量：不把“所有声部必须恰好填满标称拍号”作为通用 ScoreIR 不变量。MusicXML 合法包含弱起、隐式小节、自由长度与本项目演示谱中的 overfull bar；强制等值会拒绝已支持的真实谱。当前不变量是正 divisions/拍号/时值、非负 onset、Long 无溢出、同 voice/staff 不重叠。编辑后的 `backup/forward` 会保持其他声部 onset，alphaTab 临时模型对 overfull bar 重建可听时间轴。
 - OMR 取消：`RecognitionWorker` 已在通用 Throwable 分类之前单独捕获并重新抛出 `CancellationException`，保留 WorkManager 取消语义，无需制造代码改动。
 - 已过时条目：`WorkspaceSelectionStore` 当前使用异步 `apply()`，不是原报告所述同步 `commit()`；AlphaTab 播放范围已由 `AlphaTabPlaybackTimeline.resolve` 覆盖缺失、重复、非有限和反向小节边界。

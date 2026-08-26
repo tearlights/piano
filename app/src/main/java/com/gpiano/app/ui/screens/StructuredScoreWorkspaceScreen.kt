@@ -9,9 +9,8 @@ import alphaTab.IScrollHandler
 import alphaTab.midi.MidiTickLookupFindBeatResultCursorMode
 import alphaTab.rendering.utils.BeatBounds
 import android.util.Log
-import android.view.GestureDetector
-import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.widget.ScrollView
 import android.widget.HorizontalScrollView
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -1240,50 +1239,31 @@ private fun MeasureRangeSelector(
     onFocusMeasure: (Int) -> Unit,
 ) {
     var pendingFocus by remember { mutableIntStateOf(selectionStartMeasure) }
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text("起点", style = MaterialTheme.typography.labelMedium)
-            TextButton(
-                onClick = {
-                    val next = (selectionStartMeasure - 1).coerceAtLeast(1)
-                    onRangeChange(next, selectionEndMeasure)
-                    onFocusMeasure(next)
-                },
-                enabled = selectionStartMeasure > 1,
-            ) { Text("−") }
-            Text("$selectionStartMeasure", style = MaterialTheme.typography.titleMedium)
-            TextButton(
-                onClick = {
-                    val next = (selectionStartMeasure + 1).coerceAtMost(selectionEndMeasure)
-                    onRangeChange(next, selectionEndMeasure)
-                    onFocusMeasure(next)
-                },
-                enabled = selectionStartMeasure < selectionEndMeasure,
-            ) { Text("+") }
-            Spacer(Modifier.weight(1f))
-            Text("终点", style = MaterialTheme.typography.labelMedium)
-            TextButton(
-                onClick = {
-                    val next = (selectionEndMeasure - 1).coerceAtLeast(selectionStartMeasure)
-                    onRangeChange(selectionStartMeasure, next)
-                    onFocusMeasure(next)
-                },
-                enabled = selectionEndMeasure > selectionStartMeasure,
-            ) { Text("−") }
-            Text("$selectionEndMeasure", style = MaterialTheme.typography.titleMedium)
-            TextButton(
-                onClick = {
-                    val next = (selectionEndMeasure + 1).coerceAtMost(measureCount)
-                    onRangeChange(selectionStartMeasure, next)
-                    onFocusMeasure(next)
-                },
-                enabled = selectionEndMeasure < measureCount,
-            ) { Text("+") }
-        }
+    Row(
+        modifier = Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text("起", style = MaterialTheme.typography.labelSmall)
+        CompactMeasureButton(
+            label = "−",
+            onClick = {
+                val next = (selectionStartMeasure - 1).coerceAtLeast(1)
+                onRangeChange(next, selectionEndMeasure)
+                onFocusMeasure(next)
+            },
+            enabled = selectionStartMeasure > 1,
+        )
+        Text("$selectionStartMeasure", style = MaterialTheme.typography.labelLarge)
+        CompactMeasureButton(
+            label = "+",
+            onClick = {
+                val next = (selectionStartMeasure + 1).coerceAtMost(measureCount)
+                onRangeChange(next, selectionEndMeasure.coerceAtLeast(next))
+                onFocusMeasure(next)
+            },
+            enabled = selectionStartMeasure < measureCount,
+        )
         if (measureCount > 1) {
             RangeSlider(
                 value = selectionStartMeasure.toFloat()..selectionEndMeasure.toFloat(),
@@ -1295,33 +1275,80 @@ private fun MeasureRangeSelector(
                 },
                 onValueChangeFinished = { onFocusMeasure(pendingFocus) },
                 valueRange = 1f..measureCount.toFloat(),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
             )
+        } else {
+            Spacer(Modifier.weight(1f))
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Text("止", style = MaterialTheme.typography.labelSmall)
+        CompactMeasureButton(
+            label = "−",
+            onClick = {
+                val next = (selectionEndMeasure - 1).coerceAtLeast(1)
+                onRangeChange(selectionStartMeasure.coerceAtMost(next), next)
+                onFocusMeasure(next)
+            },
+            enabled = selectionEndMeasure > 1,
+        )
+        Text("$selectionEndMeasure", style = MaterialTheme.typography.labelLarge)
+        CompactMeasureButton(
+            label = "+",
+            onClick = {
+                val next = (selectionEndMeasure + 1).coerceAtMost(measureCount)
+                onRangeChange(selectionStartMeasure, next)
+                onFocusMeasure(next)
+            },
+            enabled = selectionEndMeasure < measureCount,
+        )
+        Text(
+            playbackMeasure?.let { "播$it" } ?: "看$focusedMeasure",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+        CompactMeasureAction(
+            label = "当前",
+            onClick = {
+                onRangeChange(focusedMeasure, focusedMeasure)
+                onFocusMeasure(focusedMeasure)
+            },
+        )
+        CompactMeasureAction(
+            label = "全篇",
+            onClick = {
+                onRangeChange(1, measureCount)
+                onFocusMeasure(1)
+            },
+        )
+    }
+}
+
+@Composable
+private fun CompactMeasureButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.size(28.dp).clickable(enabled = enabled, onClick = onClick),
+        shape = MaterialTheme.shapes.small,
+        color = if (enabled) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
             Text(
-                playbackMeasure?.let { "正在播放第 $it 小节" } ?: "查看第 $focusedMeasure 小节",
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                label,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.outline,
             )
-            TextButton(
-                onClick = {
-                    onRangeChange(focusedMeasure, focusedMeasure)
-                    onFocusMeasure(focusedMeasure)
-                },
-            ) { Text("当前小节") }
-            TextButton(
-                onClick = {
-                    onRangeChange(1, measureCount)
-                    onFocusMeasure(1)
-                },
-            ) { Text("全篇") }
         }
     }
+}
+
+@Composable
+private fun CompactMeasureAction(label: String, onClick: () -> Unit) {
+    Text(
+        label,
+        modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 5.dp, vertical = 3.dp),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.primary,
+    )
 }
 
 @Composable
@@ -1347,24 +1374,13 @@ private fun ScoreRenderer(
                 factory = { viewContext ->
                     AlphaTabView(viewContext, null).apply {
                         var loadStarted = false
-                        val tapDetector = GestureDetector(
-                            viewContext,
-                            object : GestureDetector.SimpleOnGestureListener() {
-                                override fun onDown(event: MotionEvent): Boolean = true
-
-                                override fun onSingleTapUp(event: MotionEvent): Boolean {
-                                    if (!currentScoreTapEnabled.value) return false
-                                    hitTestMeasure(event.rawX, event.rawY, score.measureCount)?.let {
-                                        currentOnMeasureTap.value(it)
-                                        return true
-                                    }
-                                    return false
-                                }
-                            },
-                        )
-                        findViewById<View>(AlphaTabR.id.innerScroll)?.setOnTouchListener { _, event ->
-                            tapDetector.onTouchEvent(event)
-                            false
+                        AlphaTabScoreTapBridge.register(
+                            owner = this,
+                            touchSlop = ViewConfiguration.get(viewContext).scaledTouchSlop,
+                        ) { rawX, rawY ->
+                            if (currentScoreTapEnabled.value) {
+                                hitTestMeasure(rawX, rawY, score.measureCount)?.let(currentOnMeasureTap.value)
+                            }
                         }
                         settings.player.enableCursor = true
                         settings.player.enableElementHighlighting = true
@@ -1468,7 +1484,10 @@ private fun ScoreRenderer(
                         if (renderState is ScoreRenderState.Ready) view.scrollToMeasure(targetMeasure)
                     }
                 },
-                onRelease = { view -> playbackController.detach(view) },
+                onRelease = { view ->
+                    AlphaTabScoreTapBridge.unregister(view)
+                    playbackController.detach(view)
+                },
             )
         }
         liveFeedback?.let { LiveScoreFeedbackOverlay(it) }
@@ -1837,19 +1856,19 @@ private fun PlaybackSettingsSheet(
                 ) { Text("起点 −") }
                 TextButton(
                     onClick = {
-                        val next = (startMeasure + 1).coerceAtMost(endMeasure)
-                        onRangeChange(next, endMeasure)
+                        val next = (startMeasure + 1).coerceAtMost(score.measureCount)
+                        onRangeChange(next, endMeasure.coerceAtLeast(next))
                         onRangeChangeFinished(next)
                     },
-                    enabled = startMeasure < endMeasure,
+                    enabled = startMeasure < score.measureCount,
                 ) { Text("起点 +") }
                 TextButton(
                     onClick = {
-                        val next = (endMeasure - 1).coerceAtLeast(startMeasure)
-                        onRangeChange(startMeasure, next)
+                        val next = (endMeasure - 1).coerceAtLeast(1)
+                        onRangeChange(startMeasure.coerceAtMost(next), next)
                         onRangeChangeFinished(next)
                     },
-                    enabled = endMeasure > startMeasure,
+                    enabled = endMeasure > 1,
                 ) { Text("终点 −") }
                 TextButton(
                     onClick = {
@@ -2452,6 +2471,17 @@ private fun AlphaTabView.hitTestMeasure(rawX: Float, rawY: Float, measureCount: 
     val density = resources.displayMetrics.density
     val viewportLocation = IntArray(2)
     getLocationOnScreen(viewportLocation)
+    if (!AlphaTabHitCoordinates.isInsideViewport(
+            rawX,
+            rawY,
+            viewportLocation[0],
+            viewportLocation[1],
+            width,
+            height,
+        )
+    ) {
+        return null
+    }
     val contentX = AlphaTabHitCoordinates.toContent(rawX, viewportLocation[0], horizontalScroll.scrollX, density)
     val contentY = AlphaTabHitCoordinates.toContent(rawY, viewportLocation[1], verticalScroll.scrollY, density)
     for (index in 0 until measureCount) {

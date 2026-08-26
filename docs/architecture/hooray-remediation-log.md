@@ -266,3 +266,9 @@
 - 现象：未触底时任意上下滑动正常；一旦到达垂直滚动底部，向上回滑只剩底部当前页，之前页不再绘制。
 - 根因：alphaTab 的 `AlphaTabRenderSurface` 在 layout dirty 时会丢弃滚动 delta，同时已回收的 lazy partial bitmap 不会重新进入完整可见分片状态。
 - 修复：检测“触底→向上”的边沿，调用 alphaTab 公共 `api.render(null)` 重建 lazy partial 缓存；完成回调不再把滚动位置跳回焦点小节。普通滚动仍使用布局后的偏移转发，不再叠加定时重绘。
+# 2026-08-26 alphaTab 触底回滑白屏：边沿回调根因
+
+- `api.render(null)` 不能恢复问题：它在底部 viewport 重新建立 partial 后，仍只渲染当前可见区域。
+- alphaTab 1.8.3 的 `AlphaTabRenderSurface.onScrollChange` 向上分支错误使用底部 placeholder 判断边界，触底后首个向上 delta 可能被吞掉，导致已回收的上方 bitmap 不触发布局。
+- 应用层现在只在“触底后首次向上”注入一次整视口负向 delta，并强制 renderSurface 重新布局；移除全量 render 和位置跳转副作用。
+- 验证：`:app:testDebugUnitTest`、`:app:assembleDebug` 均通过，待真机重点复测触底后连续上滑。

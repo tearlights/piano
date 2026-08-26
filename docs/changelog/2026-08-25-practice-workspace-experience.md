@@ -43,3 +43,8 @@
 ## 2026-08-26 触底回滑缓存重建
 
 - 针对“未触底正常、触底后回滑只剩当前页”的回归，检测触底到上滑的边沿并调用 alphaTab 公共 render 重建 lazy partial 缓存；恢复时保持用户当前滚动位置。
+# 2026-08-26 触底回滑白屏根因修复
+
+- 移除无效的触底后 `api.render(null)` 重建方案。
+- 针对 alphaTab 1.8.3 向上边界判断错误，在触底后首次上滑注入整视口负向 delta，并强制 renderSurface 重新布局，恢复上方已回收谱面 partial。
+- `:app:testDebugUnitTest` 与 `:app:assembleDebug` 已通过，待真机确认边沿连续上滑。

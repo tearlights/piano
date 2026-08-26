@@ -1428,7 +1428,6 @@ private fun ScoreRenderer(
                         settings.notation.elements.set(NotationElement.ScoreCopyright, false)
                         settings.display.padding = DoubleList(0.0, 0.0, 0.0, 0.0)
                         var scrollBridgeInstalled = false
-                        var suppressScrollRestoreAfterLazyReset = false
                         playbackController.attach(
                             this,
                             score.parts.associate { part ->
@@ -1453,18 +1452,11 @@ private fun ScoreRenderer(
                             post {
                                 renderState = ScoreRenderState.Ready
                                 if (!scrollBridgeInstalled) {
-                                    stabilizeGpianoLazyRendering {
-                                        suppressScrollRestoreAfterLazyReset = true
-                                        api.render(null)
-                                    }
+                                    stabilizeGpianoLazyRendering()
                                     scrollBridgeInstalled = true
                                 }
                                 playbackController.markScoreRendered()
-                                if (suppressScrollRestoreAfterLazyReset) {
-                                    suppressScrollRestoreAfterLazyReset = false
-                                } else {
-                                    scrollToMeasure(tag as? Int ?: 1)
-                                }
+                                scrollToMeasure(tag as? Int ?: 1)
                             }
                         }
                         api.error.on { error ->
@@ -2636,7 +2628,7 @@ private fun AlphaTabScore.ensureDistinctPlaybackChannels() {
 }
 
 @OptIn(ExperimentalContracts::class, ExperimentalUnsignedTypes::class)
-private fun AlphaTabView.stabilizeGpianoLazyRendering(onBottomToTopRecovery: () -> Unit) {
+private fun AlphaTabView.stabilizeGpianoLazyRendering() {
     val renderSurface = findViewById<View>(AlphaTabR.id.renderSurface) ?: return
     val alphaTabScrollListener = renderSurface as? View.OnScrollChangeListener ?: return
     val verticalScroll = findViewById<ScrollView>(AlphaTabR.id.innerScroll) ?: return
@@ -2692,12 +2684,25 @@ private fun AlphaTabView.stabilizeGpianoLazyRendering(onBottomToTopRecovery: () 
     }
 
     verticalScroll.setOnScrollChangeListener { _, _, y, _, oldY ->
-        val maxScrollY = (verticalScroll.getChildAt(0)?.height ?: 0) - verticalScroll.height
+        val maxScrollY = (verticalScroll.getChildAt(0)?.measuredHeight ?: 0) - verticalScroll.height
         if (maxScrollY > 0 && y >= maxScrollY) {
             reachedVerticalBottom = true
         } else if (reachedVerticalBottom && y < oldY) {
+            // alphaTab 1.8.3 compares the upward delta against its bottom
+            // visible placeholder. At the lower boundary that check can miss
+            // the first upward movement, leaving the earlier bitmaps recycled.
+            // Feed one synthetic full-viewport upward delta so alphaTab marks
+            // its render surface dirty and lays out the newly visible partials.
+            alphaTabScrollListener.onScrollChange(
+                verticalScroll,
+                verticalScroll.scrollX,
+                y,
+                verticalScroll.scrollX,
+                y + verticalScroll.height,
+            )
+            renderSurface.forceLayout()
+            renderSurface.requestLayout()
             reachedVerticalBottom = false
-            onBottomToTopRecovery()
         }
         postScrollSync()
     }

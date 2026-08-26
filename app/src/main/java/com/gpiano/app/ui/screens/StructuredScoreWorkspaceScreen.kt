@@ -7,10 +7,12 @@ import alphaTab.core.ecmaScript.Uint8Array
 import alphaTab.importer.ScoreLoader
 import alphaTab.IScrollHandler
 import alphaTab.midi.MidiTickLookupFindBeatResultCursorMode
+import alphaTab.model.Score as AlphaTabScore
 import alphaTab.rendering.utils.BeatBounds
 import android.util.Log
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.ViewTreeObserver
 import android.widget.ScrollView
 import android.widget.HorizontalScrollView
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -253,6 +255,12 @@ fun StructuredScoreWorkspaceScreen(
     playbackController.onStateChanged = { playerState = it }
     DisposableEffect(playbackController) {
         onDispose { playbackController.detach() }
+    }
+
+    fun stopPlaybackIfActive() {
+        if (playerState.phase == ScorePlayerPhase.Playing || playerState.phase == ScorePlayerPhase.Paused) {
+            playbackController.stop()
+        }
     }
 
     val applyOperation: (CorrectionOperation) -> Unit = { operation ->
@@ -583,6 +591,7 @@ fun StructuredScoreWorkspaceScreen(
                 hand = playbackHand,
                 looping = playbackLooping,
                 onRangeChange = { start, end ->
+                    stopPlaybackIfActive()
                     val range = WorkspaceMeasureSelection.normalizeRange(
                         start,
                         end,
@@ -592,9 +601,18 @@ fun StructuredScoreWorkspaceScreen(
                     selectionEndMeasure = range.last
                 },
                 onRangeChangeFinished = { focusedMeasure = it },
-                onSpeedChange = { playbackSpeed = it },
-                onHandChange = { playbackHand = it },
-                onLoopingChange = { playbackLooping = it },
+                onSpeedChange = {
+                    stopPlaybackIfActive()
+                    playbackSpeed = it
+                },
+                onHandChange = {
+                    stopPlaybackIfActive()
+                    playbackHand = it
+                },
+                onLoopingChange = {
+                    stopPlaybackIfActive()
+                    playbackLooping = it
+                },
                 midiExportBusy = midiExportBusy,
                 midiExportMessage = midiExportMessage,
                 midiExportFailed = midiExportFailed,
@@ -1409,6 +1427,7 @@ private fun ScoreRenderer(
                         settings.notation.elements.set(NotationElement.ScoreWordsAndMusic, false)
                         settings.notation.elements.set(NotationElement.ScoreCopyright, false)
                         settings.display.padding = DoubleList(0.0, 0.0, 0.0, 0.0)
+                        var scrollBridgeInstalled = false
                         playbackController.attach(
                             this,
                             score.parts.associate { part ->
@@ -1432,7 +1451,10 @@ private fun ScoreRenderer(
                             )
                             post {
                                 renderState = ScoreRenderState.Ready
-                                stabilizeGpianoLazyRendering()
+                                if (!scrollBridgeInstalled) {
+                                    stabilizeGpianoLazyRendering()
+                                    scrollBridgeInstalled = true
+                                }
                                 playbackController.markScoreRendered()
                                 scrollToMeasure(tag as? Int ?: 1)
                             }
@@ -1458,12 +1480,17 @@ private fun ScoreRenderer(
                                         )
                                         val normalizedBars = AlphaTabPlaybackTimeline
                                             .normalizeOverfullMeasures(score)
+                                        score.ensureDistinctPlaybackChannels()
                                         val trackIndexes = DoubleList()
                                         for (track in score.tracks) trackIndexes.push(track.index)
                                         Log.d(
                                             "GpianoAlphaTab",
                                             "parsed score: tracks=${score.tracks.count()}, " +
-                                                "normalizedOverfullBars=$normalizedBars",
+                                                "normalizedOverfullBars=$normalizedBars, " +
+                                                "channels=${score.tracks.joinToString { track ->
+                                                    "${track.index}:${track.playbackInfo.primaryChannel}/" +
+                                                        track.playbackInfo.secondaryChannel
+                                                }}",
                                         )
                                         api.renderScore(score, trackIndexes)
                                     }.onFailure { error ->
@@ -2575,35 +2602,88 @@ private fun MidiPracticeControlBar(
 }
 
 @OptIn(ExperimentalContracts::class, ExperimentalUnsignedTypes::class)
+private fun AlphaTabScore.ensureDistinctPlaybackChannels() {
+    val usedChannels = mutableSetOf<Int>()
+    for (track in tracks) {
+        val info = track.playbackInfo
+        val requestedPrimary = info.primaryChannel.toInt()
+        val channelAllowed = { channel: Int ->
+            channel in 0..15 && (track.isPercussion || channel != 9)
+        }
+        val primary = requestedPrimary.takeIf { channelAllowed(it) && it !in usedChannels }
+            ?: (0..15).firstOrNull { channelAllowed(it) && it !in usedChannels }
+            ?: requestedPrimary.coerceIn(0, 15)
+        info.primaryChannel = primary.toDouble()
+        usedChannels += primary
+
+        val requestedSecondary = info.secondaryChannel.toInt()
+        val secondary = when {
+            requestedSecondary == requestedPrimary && requestedPrimary == primary -> primary
+            channelAllowed(requestedSecondary) && requestedSecondary !in usedChannels -> requestedSecondary
+            else -> primary
+        }
+        info.secondaryChannel = secondary.toDouble()
+        usedChannels += secondary
+    }
+}
+
+@OptIn(ExperimentalContracts::class, ExperimentalUnsignedTypes::class)
 private fun AlphaTabView.stabilizeGpianoLazyRendering() {
     val renderSurface = findViewById<View>(AlphaTabR.id.renderSurface) ?: return
     val alphaTabScrollListener = renderSurface as? View.OnScrollChangeListener ?: return
     val verticalScroll = findViewById<ScrollView>(AlphaTabR.id.innerScroll) ?: return
     val horizontalScroll = findViewById<HorizontalScrollView>(AlphaTabR.id.outerScroll) ?: return
-    val restoreVisibleParts = Runnable {
-        renderSurface.requestLayout()
-        renderSurface.postInvalidate()
+    var deliveredVerticalY = verticalScroll.scrollY
+    var deliveredHorizontalX = horizontalScroll.scrollX
+    var syncPosted = false
+
+    fun syncScrollState() {
+        syncPosted = false
+        val currentVerticalY = verticalScroll.scrollY
+        val currentHorizontalX = horizontalScroll.scrollX
+        if (currentVerticalY != deliveredVerticalY) {
+            alphaTabScrollListener.onScrollChange(
+                verticalScroll,
+                verticalScroll.scrollX,
+                currentVerticalY,
+                verticalScroll.scrollX,
+                deliveredVerticalY,
+            )
+            deliveredVerticalY = currentVerticalY
+        }
+        if (currentHorizontalX != deliveredHorizontalX) {
+            alphaTabScrollListener.onScrollChange(
+                horizontalScroll,
+                currentHorizontalX,
+                horizontalScroll.scrollY,
+                deliveredHorizontalX,
+                horizontalScroll.scrollY,
+            )
+            deliveredHorizontalX = currentHorizontalX
+        }
     }
-    val restoreVisiblePartsLate = Runnable {
-        renderSurface.requestLayout()
-        renderSurface.postInvalidate()
+
+    fun postScrollSync() {
+        if (!syncPosted) {
+            syncPosted = true
+            // AlphaTab skips scroll events while its placeholder layout is dirty.
+            // Request the layout first, then forward the latest offset after the
+            // next traversal so the skipped bottom-to-top delta is not lost.
+            renderSurface.requestLayout()
+            val observer = renderSurface.viewTreeObserver
+            val afterLayout = object : ViewTreeObserver.OnPreDrawListener {
+                override fun onPreDraw(): Boolean {
+                    if (observer.isAlive) observer.removeOnPreDrawListener(this)
+                    syncScrollState()
+                    return true
+                }
+            }
+            observer.addOnPreDrawListener(afterLayout)
+        }
     }
-    fun scheduleVisiblePartRestore() {
-        renderSurface.removeCallbacks(restoreVisibleParts)
-        renderSurface.removeCallbacks(restoreVisiblePartsLate)
-        renderSurface.postDelayed(restoreVisibleParts, 140L)
-        // Rendering a recycled placeholder is asynchronous; the second pass makes
-        // the recovery reliable after a fast down/up fling has settled.
-        renderSurface.postDelayed(restoreVisiblePartsLate, 520L)
-    }
-    verticalScroll.setOnScrollChangeListener { view, x, y, oldX, oldY ->
-        alphaTabScrollListener.onScrollChange(view, x, y, oldX, oldY)
-        if (y != oldY) scheduleVisiblePartRestore()
-    }
-    horizontalScroll.setOnScrollChangeListener { view, x, y, oldX, oldY ->
-        alphaTabScrollListener.onScrollChange(view, x, y, oldX, oldY)
-        if (x != oldX) scheduleVisiblePartRestore()
-    }
+
+    verticalScroll.setOnScrollChangeListener { _, _, _, _, _ -> postScrollSync() }
+    horizontalScroll.setOnScrollChangeListener { _, _, _, _, _ -> postScrollSync() }
 }
 
 private val ScorePitchSaver = Saver<ScorePitch, String>(

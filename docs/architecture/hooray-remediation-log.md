@@ -250,9 +250,14 @@
 ### 下滑后上滑再次出现谱面白屏
 
 - 复现：在练习工作区多轮快速下滑再上滑，alphaTab 可能只保留高亮底色，离屏 bitmap 未及时恢复。
-- 修复：保留 alphaTab 原生 `onScrollChange` 转发，并在上下滚动停止后分别延迟 140ms 与 520ms 补发 render surface 的布局和重绘；不关闭懒加载，避免整谱空白。
+- 历史方案（已被 2026-08-26 修正替代）：曾尝试在上下滚动停止后延迟 140ms 与 520ms 补发 render surface 布局和重绘；实际根因是 alphaTab 在 layout dirty 时丢弃滚动 delta，现改为布局后的 `OnPreDraw` 偏移转发。
 - 验证：真机完成单轮及三轮快速上下滑，谱面完整恢复且无崩溃；Android JVM 72 项测试与 Debug 构建通过。
 
 - 小节容量：不把“所有声部必须恰好填满标称拍号”作为通用 ScoreIR 不变量。MusicXML 合法包含弱起、隐式小节、自由长度与本项目演示谱中的 overfull bar；强制等值会拒绝已支持的真实谱。当前不变量是正 divisions/拍号/时值、非负 onset、Long 无溢出、同 voice/staff 不重叠。编辑后的 `backup/forward` 会保持其他声部 onset，alphaTab 临时模型对 overfull bar 重建可听时间轴。
 - OMR 取消：`RecognitionWorker` 已在通用 Throwable 分类之前单独捕获并重新抛出 `CancellationException`，保留 WorkManager 取消语义，无需制造代码改动。
 - 已过时条目：`WorkspaceSelectionStore` 当前使用异步 `apply()`，不是原报告所述同步 `commit()`；AlphaTab 播放范围已由 `AlphaTabPlaybackTimeline.resolve` 覆盖缺失、重复、非有限和反向小节边界。
+### alphaTab 声部播放与底部回滑恢复（2026-08-26）
+
+- 播放修复：MusicXML 未提供 `midi-channel` 时，多个 part 可能共享 alphaTab 默认声道；`changeTrackMute` 实际按声道静音，会把另一只手一起静音。送入播放器前为重复声道分配独立 channel，再按左右手筛选 track。切换手别、速度、循环或范围时清理旧 playback plan，避免暂停/继续沿用上一种手别。
+- 谱面修复：alphaTab 在 placeholder layout dirty 时会忽略滚动事件。底部回滑改为先请求一次布局，再在 `OnPreDraw` 中转发最新滚动偏移，补回被忽略的 delta；移除 140/520ms 两阶段定时重绘。
+- 验证：Android JVM 测试与 Debug 编译通过；真机仍需分别试听左右手并复测到达底部后的上滑路径。

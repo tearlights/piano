@@ -2584,19 +2584,25 @@ private fun AlphaTabView.stabilizeGpianoLazyRendering() {
         renderSurface.requestLayout()
         renderSurface.postInvalidate()
     }
+    val restoreVisiblePartsLate = Runnable {
+        renderSurface.requestLayout()
+        renderSurface.postInvalidate()
+    }
+    fun scheduleVisiblePartRestore() {
+        renderSurface.removeCallbacks(restoreVisibleParts)
+        renderSurface.removeCallbacks(restoreVisiblePartsLate)
+        renderSurface.postDelayed(restoreVisibleParts, 140L)
+        // Rendering a recycled placeholder is asynchronous; the second pass makes
+        // the recovery reliable after a fast down/up fling has settled.
+        renderSurface.postDelayed(restoreVisiblePartsLate, 520L)
+    }
     verticalScroll.setOnScrollChangeListener { view, x, y, oldX, oldY ->
         alphaTabScrollListener.onScrollChange(view, x, y, oldX, oldY)
-        if (y < oldY) {
-            renderSurface.removeCallbacks(restoreVisibleParts)
-            renderSurface.postDelayed(restoreVisibleParts, 80L)
-        }
+        if (y != oldY) scheduleVisiblePartRestore()
     }
     horizontalScroll.setOnScrollChangeListener { view, x, y, oldX, oldY ->
         alphaTabScrollListener.onScrollChange(view, x, y, oldX, oldY)
-        if (x < oldX) {
-            renderSurface.removeCallbacks(restoreVisibleParts)
-            renderSurface.postDelayed(restoreVisibleParts, 80L)
-        }
+        if (x != oldX) scheduleVisiblePartRestore()
     }
 }
 

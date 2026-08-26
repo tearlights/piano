@@ -247,6 +247,12 @@
 - 修复：点击监听改为 Activity 级观察桥，不消费 alphaTab 滚动事件；命中计算增加 alphaTab 视口边界，底部导航和控制栏点击不会再被当作小节点击。
 - 验证：真机谱面实际渲染，点击及滚动后仍保持可见；坐标换算和视口边界均有单元测试。
 
+### 下滑后上滑再次出现谱面白屏
+
+- 复现：在练习工作区多轮快速下滑再上滑，alphaTab 可能只保留高亮底色，离屏 bitmap 未及时恢复。
+- 修复：保留 alphaTab 原生 `onScrollChange` 转发，并在上下滚动停止后分别延迟 140ms 与 520ms 补发 render surface 的布局和重绘；不关闭懒加载，避免整谱空白。
+- 验证：真机完成单轮及三轮快速上下滑，谱面完整恢复且无崩溃；Android JVM 72 项测试与 Debug 构建通过。
+
 - 小节容量：不把“所有声部必须恰好填满标称拍号”作为通用 ScoreIR 不变量。MusicXML 合法包含弱起、隐式小节、自由长度与本项目演示谱中的 overfull bar；强制等值会拒绝已支持的真实谱。当前不变量是正 divisions/拍号/时值、非负 onset、Long 无溢出、同 voice/staff 不重叠。编辑后的 `backup/forward` 会保持其他声部 onset，alphaTab 临时模型对 overfull bar 重建可听时间轴。
 - OMR 取消：`RecognitionWorker` 已在通用 Throwable 分类之前单独捕获并重新抛出 `CancellationException`，保留 WorkManager 取消语义，无需制造代码改动。
 - 已过时条目：`WorkspaceSelectionStore` 当前使用异步 `apply()`，不是原报告所述同步 `commit()`；AlphaTab 播放范围已由 `AlphaTabPlaybackTimeline.resolve` 覆盖缺失、重复、非有限和反向小节边界。

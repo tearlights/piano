@@ -1,6 +1,6 @@
 # 当前项目状态
 
-最后更新：2026-08-26
+最后更新：2026-08-30
 
 ## 一句话结论
 
@@ -19,6 +19,12 @@ Gpiano 已完成可运行、可验证的比赛 MVP 技术闭环：用户可把�
 ```
 
 原谱、主谱修订、派生版本和练习记录均默认保存在本机；每条外发 AI 请求都要求用户针对当前选段再次确认。
+
+## 2026-08-30 alphaTab 惯性滚动修复审计
+
+- 已确认 alphaTab 1.8.3 在 `_layoutDirty` 状态下可能没有再次进入 `onLayout`，导致边界 fling 后已回收的 partial bitmap 不会恢复；当前通过同步 render surface 布局后再补发累计偏移解决。
+- 清理了历史排查阶段的延迟重绘、`api.render(null)`、单向 synthetic delta 和高频诊断日志；滚动请求仅在布局脏或存在未交付偏移时调度，partial 完成回调也做同样条件过滤。
+- `:app:testDebugUnitTest`、`:app:assembleDebug` 已通过；最终 APK 已安装真机，待用户继续进行触顶/触底反向滚动验收。
 
 ## 能力状态矩阵
 

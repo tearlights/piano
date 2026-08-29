@@ -67,6 +67,8 @@ Gpiano AI 是面向钢琴学习者的本地优先 Android 练习伙伴。它将�
 - 没有真实学习者的完整流程验证、真实模型质量评估或真实 MIDI 电钢琴兼容性数据。
 - 缺少 Compose/设备自动化测试与发布级 companion 运维包装。
 
+2026-08-30 对 alphaTab 惯性滚动白屏修复做了性能审计：保留 `_layoutDirty` 下同步 render surface `measure/layout` 与累计偏移补发这一根因修复，移除排查阶段的高频日志，并将 `requestLayout` 和 `partialRenderFinished` 调度限制在确有脏布局或待同步偏移时。
+
 ## 2026-08-19 第三周 BP 筹备
 
 第三周进入 BP 筹备，初步规划见 `比赛资料/第三周/output/BP初步规划.md`，商业 BP 初稿见 `比赛资料/第三周/output/Gpiano-AI商业BP-初稿.md`。该规划和初稿不代表新增产品完成度：本周需以 ADR-0017 的派生版本独立修订链为实际推进项，并补齐至少两位学习者完整流程、市场来源和商业验证的原始证据。

@@ -2714,6 +2714,13 @@ private fun AlphaTabView.stabilizeGpianoLazyRendering() {
         }
     }
 
+    // A partial render is the moment alphaTab clears the dirty layout state.
+    // Re-drive the bridge immediately instead of waiting for another touch or
+    // fling event (which may never arrive after an edge rebound).
+    api.renderer.partialRenderFinished.on {
+        renderSurface.post { postScrollSync() }
+    }
+
     verticalScroll.setOnScrollChangeListener { _, _, y, _, oldY ->
         postScrollSync()
     }

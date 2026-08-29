@@ -272,9 +272,10 @@
 - alphaTab 1.8.3 的 `AlphaTabRenderSurface.onScrollChange` 向上分支错误使用底部 placeholder 判断边界，触底后首个向上 delta 可能被吞掉，导致已回收的上方 bitmap 不触发布局。
 - 应用层现在只在“触底后首次向上”注入一次整视口负向 delta，并强制 renderSurface 重新布局；移除全量 render 和位置跳转副作用。
 - 验证：`:app:testDebugUnitTest`、`:app:assembleDebug` 均通过，待真机重点复测触底后连续上滑。
-# 2026-08-29 alphaTab 惯性滚动丢失 delta
+# 2026-08-29 alphaTab 惯性滚动丢失 delta（再次补强）
 
 - 新复现确认问题同时存在于“惯性触底后上滑”和“惯性触顶后下滑”，根因是 alphaTab `AlphaTabRenderSurface` 在 `_layoutDirty` 期间直接丢弃滚动回调。
 - 滚动桥接现在读取 alphaTab 的布局脏状态；脏状态期间不推进已交付偏移，等下一次布局完成后补发累计位移，覆盖拖动和 fling 的两个方向。
 - 移除单向触底 synthetic delta 方案，不再依赖 `api.render(null)`。
+- 监听 `partialRenderFinished`，partial bitmap 完成后立即重试桥接；即使边界回弹已经结束、没有新的触摸事件，也能补发累计位移。
 - 验证：`:app:compileDebugKotlin` 已通过，完整 JVM 测试与真机复测待执行。

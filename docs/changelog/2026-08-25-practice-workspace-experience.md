@@ -53,3 +53,4 @@
 - 修正 alphaTab 异步 partial 渲染期间丢失 fling 滚动 delta 的问题。
 - 布局脏期间保留未交付偏移，布局完成后补发累计位移；同时覆盖惯性触顶后下滑和惯性触底后上滑。
 - 移除仅针对触底的 synthetic delta 方案。
+- 监听 `partialRenderFinished`，partial bitmap 完成后主动补发待交付滚动位移，覆盖 fling 结束后没有新触摸事件的边界回弹场景。

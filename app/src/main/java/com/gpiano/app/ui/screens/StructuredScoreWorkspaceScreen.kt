@@ -2633,15 +2633,40 @@ private fun AlphaTabView.stabilizeGpianoLazyRendering() {
     val alphaTabScrollListener = renderSurface as? View.OnScrollChangeListener ?: return
     val verticalScroll = findViewById<ScrollView>(AlphaTabR.id.innerScroll) ?: return
     val horizontalScroll = findViewById<HorizontalScrollView>(AlphaTabR.id.outerScroll) ?: return
+    // alphaTab 1.8.3 drops scroll callbacks while its render surface is
+    // waiting for a partial bitmap. Keep the bridge tied to that state so a
+    // fling cannot permanently lose the offset between two layouts.
+    val layoutDirtyField = runCatching {
+        renderSurface.javaClass.getDeclaredField("_layoutDirty").apply { isAccessible = true }
+    }.getOrNull()
+
+    fun alphaTabLayoutDirty(): Boolean = runCatching {
+        layoutDirtyField?.getBoolean(renderSurface) ?: false
+    }.getOrDefault(false)
+
     var deliveredVerticalY = verticalScroll.scrollY
     var deliveredHorizontalX = horizontalScroll.scrollX
     var syncPosted = false
-    var reachedVerticalBottom = false
+    lateinit var postScrollSync: () -> Unit
 
     fun syncScrollState() {
         syncPosted = false
         val currentVerticalY = verticalScroll.scrollY
         val currentHorizontalX = horizontalScroll.scrollX
+        if (alphaTabLayoutDirty()) {
+            // The alphaTab listener returns immediately in this state. Do not
+            // advance delivered offsets; the next frame will replay the full
+            // delta after onLayout clears the flag.
+            renderSurface.postOnAnimation {
+                if (alphaTabLayoutDirty() ||
+                    verticalScroll.scrollY != deliveredVerticalY ||
+                    horizontalScroll.scrollX != deliveredHorizontalX
+                ) {
+                    postScrollSync()
+                }
+            }
+            return
+        }
         if (currentVerticalY != deliveredVerticalY) {
             alphaTabScrollListener.onScrollChange(
                 verticalScroll,
@@ -2662,9 +2687,15 @@ private fun AlphaTabView.stabilizeGpianoLazyRendering() {
             )
             deliveredHorizontalX = currentHorizontalX
         }
+        if (alphaTabLayoutDirty() ||
+            verticalScroll.scrollY != deliveredVerticalY ||
+            horizontalScroll.scrollX != deliveredHorizontalX
+        ) {
+            renderSurface.postOnAnimation { postScrollSync() }
+        }
     }
 
-    fun postScrollSync() {
+    postScrollSync = {
         if (!syncPosted) {
             syncPosted = true
             // AlphaTab skips scroll events while its placeholder layout is dirty.
@@ -2684,26 +2715,6 @@ private fun AlphaTabView.stabilizeGpianoLazyRendering() {
     }
 
     verticalScroll.setOnScrollChangeListener { _, _, y, _, oldY ->
-        val maxScrollY = (verticalScroll.getChildAt(0)?.measuredHeight ?: 0) - verticalScroll.height
-        if (maxScrollY > 0 && y >= maxScrollY) {
-            reachedVerticalBottom = true
-        } else if (reachedVerticalBottom && y < oldY) {
-            // alphaTab 1.8.3 compares the upward delta against its bottom
-            // visible placeholder. At the lower boundary that check can miss
-            // the first upward movement, leaving the earlier bitmaps recycled.
-            // Feed one synthetic full-viewport upward delta so alphaTab marks
-            // its render surface dirty and lays out the newly visible partials.
-            alphaTabScrollListener.onScrollChange(
-                verticalScroll,
-                verticalScroll.scrollX,
-                y,
-                verticalScroll.scrollX,
-                y + verticalScroll.height,
-            )
-            renderSurface.forceLayout()
-            renderSurface.requestLayout()
-            reachedVerticalBottom = false
-        }
         postScrollSync()
     }
     horizontalScroll.setOnScrollChangeListener { _, _, _, _, _ -> postScrollSync() }

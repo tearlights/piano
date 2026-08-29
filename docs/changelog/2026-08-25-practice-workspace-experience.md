@@ -48,3 +48,8 @@
 - 移除无效的触底后 `api.render(null)` 重建方案。
 - 针对 alphaTab 1.8.3 向上边界判断错误，在触底后首次上滑注入整视口负向 delta，并强制 renderSurface 重新布局，恢复上方已回收谱面 partial。
 - `:app:testDebugUnitTest` 与 `:app:assembleDebug` 已通过，待真机确认边沿连续上滑。
+# 2026-08-29 惯性滚动边界白屏
+
+- 修正 alphaTab 异步 partial 渲染期间丢失 fling 滚动 delta 的问题。
+- 布局脏期间保留未交付偏移，布局完成后补发累计位移；同时覆盖惯性触顶后下滑和惯性触底后上滑。
+- 移除仅针对触底的 synthetic delta 方案。

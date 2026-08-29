@@ -2649,11 +2649,33 @@ private fun AlphaTabView.stabilizeGpianoLazyRendering() {
     var syncPosted = false
     lateinit var postScrollSync: () -> Unit
 
+    fun relayoutRenderSurfaceNow() {
+        if (renderSurface.width <= 0 || renderSurface.height <= 0) return
+        runCatching {
+            renderSurface.forceLayout()
+            renderSurface.measure(
+                View.MeasureSpec.makeMeasureSpec(renderSurface.width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(renderSurface.height, View.MeasureSpec.EXACTLY),
+            )
+            renderSurface.layout(
+                renderSurface.left,
+                renderSurface.top,
+                renderSurface.right,
+                renderSurface.bottom,
+            )
+        }.onFailure { renderSurface.requestLayout() }
+    }
+
     fun syncScrollState() {
         syncPosted = false
         val currentVerticalY = verticalScroll.scrollY
         val currentHorizontalX = horizontalScroll.scrollX
         if (alphaTabLayoutDirty()) {
+            relayoutRenderSurfaceNow()
+            if (!alphaTabLayoutDirty()) {
+                syncScrollState()
+                return
+            }
             // The alphaTab listener returns immediately in this state. Do not
             // advance delivered offsets; the next frame will replay the full
             // delta after onLayout clears the flag.
@@ -2686,6 +2708,9 @@ private fun AlphaTabView.stabilizeGpianoLazyRendering() {
                 horizontalScroll.scrollY,
             )
             deliveredHorizontalX = currentHorizontalX
+        }
+        if (alphaTabLayoutDirty()) {
+            relayoutRenderSurfaceNow()
         }
         if (alphaTabLayoutDirty() ||
             verticalScroll.scrollY != deliveredVerticalY ||

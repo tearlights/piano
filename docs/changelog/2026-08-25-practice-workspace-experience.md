@@ -54,3 +54,4 @@
 - 布局脏期间保留未交付偏移，布局完成后补发累计位移；同时覆盖惯性触顶后下滑和惯性触底后上滑。
 - 移除仅针对触底的 synthetic delta 方案。
 - 监听 `partialRenderFinished`，partial bitmap 完成后主动补发待交付滚动位移，覆盖 fling 结束后没有新触摸事件的边界回弹场景。
+- 修复进一步定位：`_layoutDirty` 置位后 alphaTab 的 `onLayout` 可能没有被 Android 遍历执行，导致已回收的上方 partial 不再恢复；现在同步滚动前强制 render surface 完成一次同步 `measure/layout`，再补发累计位移并重新触发可见 partial。

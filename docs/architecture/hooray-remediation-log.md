@@ -279,4 +279,5 @@
 - 移除单向触底 synthetic delta 方案，不再依赖 `api.render(null)`。
 - 监听 `partialRenderFinished`，partial bitmap 完成后立即重试桥接；即使边界回弹已经结束、没有新的触摸事件，也能补发累计位移。
 - 进一步确认仅补发偏移仍不足：alphaTab 的 `_layoutDirty` 置位后，Android 遍历可能不会再次进入其 `onLayout`，上方占位块因此保持已回收状态。同步偏移前现对 render surface 执行同步 `forceLayout`/`measure`/`layout`，先让 alphaTab 清除脏布局并重新排入可见 partial，再补发累计偏移。
+- 代码审计移除了排查阶段的高频渲染日志；`requestLayout` 与 `partialRenderFinished` 回调现在只有在布局脏或存在未交付偏移时才会继续调度，避免无效主线程遍历。
 - 验证：`:app:testDebugUnitTest` 与 `:app:assembleDebug` 已通过，诊断日志确认上下边界占位块会随滚动方向正确切换，APK 已安装，待真机复测。

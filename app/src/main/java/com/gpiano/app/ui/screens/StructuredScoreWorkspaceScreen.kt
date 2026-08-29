@@ -1440,15 +1440,7 @@ private fun ScoreRenderer(
                                     )
                             },
                         )
-                        api.renderStarted.on { isResize ->
-                            Log.d("GpianoAlphaTab", "renderStarted: resize=$isResize, view=${width}x${height}")
-                        }
-                        api.renderFinished.on { result ->
-                            Log.d(
-                                "GpianoAlphaTab",
-                                "renderFinished: ${result.totalWidth}x${result.totalHeight}, " +
-                                    "part=${result.width}x${result.height}",
-                            )
+                        api.renderFinished.on { _ ->
                             post {
                                 renderState = ScoreRenderState.Ready
                                 if (!scrollBridgeInstalled) {
@@ -1478,20 +1470,10 @@ private fun ScoreRenderer(
                                             uint8Constructor.newInstance(bytes, null) as Uint8Array,
                                             api.settings,
                                         )
-                                        val normalizedBars = AlphaTabPlaybackTimeline
-                                            .normalizeOverfullMeasures(score)
+                                        AlphaTabPlaybackTimeline.normalizeOverfullMeasures(score)
                                         score.ensureDistinctPlaybackChannels()
                                         val trackIndexes = DoubleList()
                                         for (track in score.tracks) trackIndexes.push(track.index)
-                                        Log.d(
-                                            "GpianoAlphaTab",
-                                            "parsed score: tracks=${score.tracks.count()}, " +
-                                                "normalizedOverfullBars=$normalizedBars, " +
-                                                "channels=${score.tracks.joinToString { track ->
-                                                    "${track.index}:${track.playbackInfo.primaryChannel}/" +
-                                                        track.playbackInfo.secondaryChannel
-                                                }}",
-                                        )
                                         api.renderScore(score, trackIndexes)
                                     }.onFailure { error ->
                                         Log.e("GpianoAlphaTab", "MusicXML parse failed", error)
@@ -2468,14 +2450,6 @@ private fun AlphaTabView.scrollToMeasure(measure: Int) {
     val verticalScroll = findViewById<ScrollView>(AlphaTabR.id.innerScroll) ?: return
     val horizontalScroll = findViewById<HorizontalScrollView>(AlphaTabR.id.outerScroll) ?: return
     verticalScroll.post {
-        Log.d(
-            "GpianoAlphaTab",
-            "measure=$measure visual=${bounds.visualBounds.y}/${bounds.visualBounds.h}, " +
-                "real=${bounds.realBounds.y}/${bounds.realBounds.h}, " +
-                "line=${bounds.lineAlignedBounds.y}/${bounds.lineAlignedBounds.h}, " +
-                "scroll=${horizontalScroll.scrollX}/${verticalScroll.scrollY}, " +
-                "viewport=${horizontalScroll.width}x${verticalScroll.height}",
-        )
         val density = resources.displayMetrics.density
         val targetX = (bounds.visualBounds.x * density)
             .roundToInt()
@@ -2726,7 +2700,9 @@ private fun AlphaTabView.stabilizeGpianoLazyRendering() {
             // AlphaTab skips scroll events while its placeholder layout is dirty.
             // Request the layout first, then forward the latest offset after the
             // next traversal so the skipped bottom-to-top delta is not lost.
-            renderSurface.requestLayout()
+            if (alphaTabLayoutDirty()) {
+                renderSurface.requestLayout()
+            }
             val observer = renderSurface.viewTreeObserver
             val afterLayout = object : ViewTreeObserver.OnPreDrawListener {
                 override fun onPreDraw(): Boolean {
@@ -2743,7 +2719,14 @@ private fun AlphaTabView.stabilizeGpianoLazyRendering() {
     // Re-drive the bridge immediately instead of waiting for another touch or
     // fling event (which may never arrive after an edge rebound).
     api.renderer.partialRenderFinished.on {
-        renderSurface.post { postScrollSync() }
+        renderSurface.post {
+            if (alphaTabLayoutDirty() ||
+                verticalScroll.scrollY != deliveredVerticalY ||
+                horizontalScroll.scrollX != deliveredHorizontalX
+            ) {
+                postScrollSync()
+            }
+        }
     }
 
     verticalScroll.setOnScrollChangeListener { _, _, y, _, oldY ->

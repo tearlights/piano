@@ -118,6 +118,10 @@ object MusicXmlRevisionCompiler {
         val chord = measure.events.filter {
             it.onsetDivisions == target.onsetDivisions && it.voice == target.voice && it.staff == target.staff
         }
+        val advancingEvent = chord.firstOrNull { !it.isChordTone }
+            ?: error("目标和弦缺少推进时间轴的主音符")
+        val cursorDelta = Math.subtractExact(value, advancingEvent.durationDivisions)
+        val chordNotes = chord.map { event -> document.findNote(event) }
         chord.forEach { event ->
             val note = document.findNote(event)
             note.requireChild("duration").textContent = value.toString()
@@ -149,6 +153,26 @@ object MusicXmlRevisionCompiler {
                 modification.setTextChild(document, "normal-notes", duration.normalNotes.toString())
             }
         }
+        if (cursorDelta != 0L) {
+            compensateFollowingCursorControl(chordNotes, cursorDelta)
+        }
+    }
+
+    private fun compensateFollowingCursorControl(chordNotes: List<Element>, cursorDelta: Long) {
+        val measure = chordNotes.first().parentNode as? Element ?: error("目标音符不在小节中")
+        val children = measure.directChildren()
+        val lastChordIndex = chordNotes.maxOf { children.indexOf(it) }
+        val control = children.drop(lastChordIndex + 1).firstOrNull { it.tagName == "backup" || it.tagName == "forward" }
+            ?: return
+        val duration = control.requireChild("duration")
+        val oldValue = duration.textContent.trim().toLongOrNull() ?: error("时间轴控制缺少合法 duration")
+        val newValue = if (control.tagName == "backup") {
+            Math.addExact(oldValue, cursorDelta)
+        } else {
+            Math.subtractExact(oldValue, cursorDelta)
+        }
+        require(newValue >= 0) { "修改时值后无法保持后续声部时间轴" }
+        if (newValue == 0L) measure.removeChild(control) else duration.textContent = newValue.toString()
     }
 
     private fun changeRest(

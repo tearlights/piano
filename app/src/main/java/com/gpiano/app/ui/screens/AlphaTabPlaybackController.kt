@@ -9,6 +9,7 @@ import alphaTab.synth.PlayerState
 import com.gpiano.app.scoreworkspace.PlaybackHand
 import com.gpiano.app.scoreworkspace.PlaybackPlan
 import com.gpiano.app.scoreworkspace.ScoreHand
+import androidx.compose.runtime.Immutable
 import kotlin.contracts.ExperimentalContracts
 
 enum class ScorePlayerPhase {
@@ -19,6 +20,7 @@ enum class ScorePlayerPhase {
     Failed,
 }
 
+@Immutable
 data class ScorePlayerUiState(
     val phase: ScorePlayerPhase = ScorePlayerPhase.Preparing,
     val currentMeasure: Int? = null,
@@ -35,6 +37,7 @@ class AlphaTabPlaybackController {
     private var handByTrack: Map<Int, ScoreHand> = emptyMap()
     private var state = ScorePlayerUiState()
     private var activePlan: PlaybackPlan? = null
+    private var playbackSequence = 0
     private val unsubscribe = mutableListOf<() -> Unit>()
 
     fun attach(view: AlphaTabView, handByTrack: Map<Int, ScoreHand>) {
@@ -48,6 +51,7 @@ class AlphaTabPlaybackController {
             view.post { publishReadyIfPossible() }
         }
         unsubscribe += api.midiLoaded.on {
+            Log.d(TAG, "midi loaded endTick=${api.endTick}")
             view.post { publishReadyIfPossible() }
         }
         unsubscribe += api.playerStateChanged.on { event ->
@@ -84,7 +88,11 @@ class AlphaTabPlaybackController {
         }
         unsubscribe += api.playedBeatChanged.on { beat ->
             val measure = beat.voice.bar.masterBar.index.toInt() + 1
-            view.post { publish(state.copy(currentMeasure = measure)) }
+            view.post {
+                if (state.currentMeasure != measure) {
+                    publish(state.copy(currentMeasure = measure))
+                }
+            }
         }
         unsubscribe += api.error.on { error ->
             view.post { fail(error.message ?: "播放器发生错误") }
@@ -109,26 +117,31 @@ class AlphaTabPlaybackController {
         applyHandFilter(currentView, plan.selection.hand)
 
         val bars = api.tickCache?.masterBars ?: error("播放器尚未建立小节时间轴")
-        val first = bars.get(plan.selection.startMeasure - 1)
-        val last = bars.get(plan.selection.endMeasure - 1)
-        check(first.masterBar.index.toInt() + 1 == plan.selection.startMeasure) { "播放起始小节映射失败" }
-        check(last.masterBar.index.toInt() + 1 == plan.selection.endMeasure) { "播放结束小节映射失败" }
-        check(first.start.roundToLongSafe() == plan.rangeStartTick) {
-            "播放时间轴与结构化乐谱不一致"
-        }
+        val range = AlphaTabPlaybackTimeline.resolve(
+            selection = plan.selection,
+            measures = (0 until bars.length.toInt()).map { index ->
+                val bar = bars.get(index)
+                AlphaTabMeasureTiming(
+                    measureIndex = bar.masterBar.index.toInt() + 1,
+                    startTick = bar.start,
+                    endTick = bar.end,
+                )
+            },
+        )
 
         api.playbackRange = PlaybackRange().apply {
-            startTick = first.start
-            endTick = last.end
+            startTick = range.startTick
+            endTick = range.endTick
         }
         api.playbackSpeed = plan.selection.speed
         api.isLooping = plan.selection.looping
-        api.tickPosition = first.start
+        api.tickPosition = range.startTick
         activePlan = plan
+        playbackSequence += 1
         Log.d(
             TAG,
-            "start measures=${plan.selection.startMeasure}-${plan.selection.endMeasure} " +
-                "ticks=${first.start}-${last.end} speed=${plan.selection.speed} " +
+            "start sequence=$playbackSequence measures=${plan.selection.startMeasure}-${plan.selection.endMeasure} " +
+                "alphaTabTicks=${range.startTick}-${range.endTick} speed=${plan.selection.speed} " +
                 "loop=${plan.selection.looping} hand=${plan.selection.hand}",
         )
         check(api.play()) { "播放器无法开始播放" }
@@ -136,6 +149,7 @@ class AlphaTabPlaybackController {
 
     fun pause() {
         runCatching { view?.api?.pause() }
+            .onSuccess { Log.d(TAG, "pause sequence=$playbackSequence") }
             .onFailure { fail(it.message ?: "无法暂停播放") }
     }
 
@@ -205,5 +219,3 @@ class AlphaTabPlaybackController {
         const val TAG = "GpianoPlayer"
     }
 }
-
-private fun Double.roundToLongSafe(): Long = kotlin.math.round(this).toLong()

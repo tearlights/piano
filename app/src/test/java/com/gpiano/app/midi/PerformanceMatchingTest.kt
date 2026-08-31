@@ -49,6 +49,15 @@ class PerformanceMatchingTest {
         assertTrue(report.matches.any { it.kind == MatchKind.Extra })
     }
 
+    @Test
+    fun fixedTimelineKeepsCountInToFirstNoteDelay() {
+        val notes = targetNotes(plan, timingOffsetMillis = 500)
+
+        val report = PerformanceMatcher.match(plan, notes)
+
+        assertTrue(report.matches.any { it.kind == MatchKind.RhythmLate })
+    }
+
     private fun targetNotes(
         plan: com.gpiano.app.scoreworkspace.PlaybackPlan,
         timingOffsetMillis: Long,

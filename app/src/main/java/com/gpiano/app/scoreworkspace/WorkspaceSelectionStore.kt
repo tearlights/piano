@@ -9,13 +9,18 @@ class WorkspaceSelectionStore(context: Context) {
 
     fun save(structureId: String) {
         require(structureId.isNotBlank()) { "结构化乐谱标识不能为空" }
-        check(preferences.edit().putString(KEY_STRUCTURE_ID, structureId).commit()) {
-            "无法保存最近打开的练习工作区"
-        }
+        preferences.edit().putString(KEY_STRUCTURE_ID, structureId).apply()
+    }
+
+    fun autoRestoreEnabled(): Boolean = preferences.getBoolean(KEY_AUTO_RESTORE, false)
+
+    fun setAutoRestoreEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_AUTO_RESTORE, enabled).apply()
     }
 
     private companion object {
         const val PREFERENCES = "workspace-selection"
         const val KEY_STRUCTURE_ID = "structureId"
+        const val KEY_AUTO_RESTORE = "autoRestore"
     }
 }

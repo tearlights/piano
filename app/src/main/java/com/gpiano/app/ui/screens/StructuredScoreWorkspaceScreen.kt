@@ -5,8 +5,16 @@ import alphaTab.NotationElement
 import alphaTab.collections.DoubleList
 import alphaTab.core.ecmaScript.Uint8Array
 import alphaTab.importer.ScoreLoader
+import alphaTab.IScrollHandler
+import alphaTab.midi.MidiTickLookupFindBeatResultCursorMode
+import alphaTab.model.Score as AlphaTabScore
+import alphaTab.rendering.utils.BeatBounds
 import android.util.Log
+import android.view.View
+import android.view.ViewConfiguration
+import android.view.ViewTreeObserver
 import android.widget.ScrollView
+import android.widget.HorizontalScrollView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -29,7 +37,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -37,9 +44,12 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -52,15 +62,27 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.gpiano.app.data.PracticeVersion
 import com.gpiano.app.data.PracticeVersionRevision
 import com.gpiano.app.data.PracticeVersionStatus
+import com.gpiano.app.data.ScoreStructure
+import com.gpiano.app.midi.MidiPracticeTarget
+import com.gpiano.app.midi.PerformanceMatcher
+import com.gpiano.app.midi.LiveFeedbackKind
+import com.gpiano.app.midi.LivePerformanceFeedback
+import com.gpiano.app.midi.MidiPracticePhase
+import com.gpiano.app.midi.WorkspaceMidiSession
+import com.gpiano.app.midi.WorkspaceMidiSessionState
 import com.gpiano.app.scoreworkspace.CorrectionOperation
 import com.gpiano.app.scoreworkspace.MusicXmlSummary
 import com.gpiano.app.scoreworkspace.MusicalDuration
@@ -106,15 +128,31 @@ private sealed interface ScoreRenderState {
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalContracts::class, ExperimentalUnsignedTypes::class)
-fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: String?) {
+fun StructuredScoreWorkspaceScreen(
+    contentPadding: PaddingValues,
+    structureId: String?,
+    autoRestoreEnabled: Boolean,
+    onSelectStructure: (String) -> Unit,
+    onChooseAnotherScore: () -> Unit,
+    onOpenLibrary: () -> Unit,
+    onAutoRestoreChange: (Boolean) -> Unit,
+    midiSession: WorkspaceMidiSession,
+    midiSessionState: WorkspaceMidiSessionState,
+) {
     val context = LocalContext.current.applicationContext
     val repository = remember { StructuredScoreRepository(context) }
     val practiceVersionRepository = remember { PracticeVersionRepository(context) }
     val playbackController = remember { AlphaTabPlaybackController() }
+    val editGate = remember { OperationGate() }
+    val practiceVersionGate = remember { OperationGate() }
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<WorkspaceLoadState>(WorkspaceLoadState.Loading) }
-    var selectedMeasure by remember { mutableIntStateOf(1) }
-    var correctionVisible by remember { mutableStateOf(false) }
+    var availableStructures by remember { mutableStateOf<List<ScoreStructure>>(emptyList()) }
+    var structureListLoading by remember { mutableStateOf(false) }
+    var structureListError by remember { mutableStateOf<String?>(null) }
+    var selectionStartMeasure by rememberSaveable(structureId) { mutableIntStateOf(1) }
+    var focusedMeasure by rememberSaveable(structureId) { mutableIntStateOf(1) }
+    var correctionVisible by rememberSaveable(structureId) { mutableStateOf(false) }
     var historyVisible by remember { mutableStateOf(false) }
     var guidanceVisible by remember { mutableStateOf(false) }
     var aiVisible by remember { mutableStateOf(false) }
@@ -123,12 +161,12 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
     var midiPlan by remember { mutableStateOf<PlaybackPlan?>(null) }
     var showSource by remember(structureId) { mutableStateOf(false) }
     var playbackSettingsVisible by remember { mutableStateOf(false) }
-    var playbackEndMeasure by remember { mutableIntStateOf(1) }
-    var playbackSpeed by remember { mutableStateOf(0.75) }
-    var playbackHand by remember { mutableStateOf(PlaybackHand.Both) }
-    var playbackLooping by remember { mutableStateOf(false) }
+    var selectionEndMeasure by rememberSaveable(structureId) { mutableIntStateOf(1) }
+    var playbackSpeed by rememberSaveable(structureId) { mutableStateOf(0.75) }
+    var playbackHand by rememberSaveable(structureId) { mutableStateOf(PlaybackHand.Both) }
+    var playbackLooping by rememberSaveable(structureId) { mutableStateOf(false) }
     var playerState by remember { mutableStateOf(ScorePlayerUiState()) }
-    var selectedEventId by remember { mutableStateOf<String?>(null) }
+    var selectedEventId by rememberSaveable(structureId) { mutableStateOf<String?>(null) }
     var editInProgress by remember { mutableStateOf(false) }
     var editError by remember { mutableStateOf<String?>(null) }
     var practiceVersions by remember(structureId) { mutableStateOf<List<PracticeVersion>>(emptyList()) }
@@ -172,12 +210,17 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
         exportPracticeVersionId = null
         if (destination != null && id != null) {
             scope.launch {
-                practiceVersionBusy = true
-                practiceVersionError = null
-                runCatching { practiceVersionRepository.export(id, destination) }
-                    .onFailure { practiceVersionError = it.message ?: "无法导出 MusicXML" }
-                practiceVersionBusy = false
+                try {
+                    runCatching { practiceVersionRepository.export(id, destination) }
+                        .onFailure { practiceVersionError = it.message ?: "无法导出 MusicXML" }
+                } finally {
+                    practiceVersionGate.leave()
+                    practiceVersionBusy = false
+                }
             }
+        } else if (id != null) {
+            practiceVersionGate.leave()
+            practiceVersionBusy = false
         }
     }
     val exportMidi = rememberLauncherForActivityResult(
@@ -214,100 +257,121 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
         onDispose { playbackController.detach() }
     }
 
+    fun stopPlaybackIfActive() {
+        if (playerState.phase == ScorePlayerPhase.Playing || playerState.phase == ScorePlayerPhase.Paused) {
+            playbackController.stop()
+        }
+    }
+
     val applyOperation: (CorrectionOperation) -> Unit = { operation ->
         val capturedPracticeVersion = activePracticeVersion
         val captured = (state as? WorkspaceLoadState.Ready)?.session
-        if (captured != null) {
+        if (captured != null && editGate.tryEnter()) {
+            editInProgress = true
+            editError = null
             scope.launch {
-                editInProgress = true
-                editError = null
-                runCatching {
-                    withContext(Dispatchers.Default) {
-                        if (capturedPracticeVersion != null) {
-                            practiceVersionRepository.apply(capturedPracticeVersion, operation)
-                        } else {
-                            repository.apply(captured, operation)
+                try {
+                    runCatching {
+                        withContext(Dispatchers.Default) {
+                            if (capturedPracticeVersion != null) {
+                                practiceVersionRepository.apply(capturedPracticeVersion, operation)
+                            } else {
+                                repository.apply(captured, operation)
+                            }
                         }
-                    }
-                }.onSuccess { revised ->
-                    if (revised is PracticeVersionDocument) {
-                        activePracticeVersion = revised
-                        inspectedPracticeVersion = revised
-                    } else if (revised is PersistentScoreSession) {
-                        state = WorkspaceLoadState.Ready(revised)
-                        activePracticeVersion = null
-                    }
-                }.onFailure { error ->
-                    editError = error.message ?: "无法应用这次校正"
+                    }.onSuccess { revised ->
+                        if (revised is PracticeVersionDocument) {
+                            activePracticeVersion = revised
+                            inspectedPracticeVersion = revised
+                        } else if (revised is PersistentScoreSession) {
+                            state = WorkspaceLoadState.Ready(revised)
+                            activePracticeVersion = null
+                        }
+                    }.onFailure { error -> editError = error.message ?: "无法应用这次校正" }
+                } finally {
+                    editGate.leave()
+                    editInProgress = false
                 }
-                editInProgress = false
             }
         }
     }
     val undoRevision: () -> Unit = {
         val capturedPracticeVersion = activePracticeVersion
         val captured = (state as? WorkspaceLoadState.Ready)?.session
-        if (captured != null) {
+        if (captured != null && editGate.tryEnter()) {
+            editInProgress = true
+            editError = null
             scope.launch {
-                editInProgress = true
-                editError = null
-                runCatching {
-                    if (capturedPracticeVersion != null) {
-                        practiceVersionRepository.undo(capturedPracticeVersion)
-                    } else {
-                        repository.undo(captured)
-                    }
-                }.onSuccess { revised ->
-                    if (revised is PracticeVersionDocument) {
-                        activePracticeVersion = revised
-                        inspectedPracticeVersion = revised
-                    } else if (revised is PersistentScoreSession) {
-                        state = WorkspaceLoadState.Ready(revised)
-                        activePracticeVersion = null
-                    }
+                try {
+                    runCatching {
+                        if (capturedPracticeVersion != null) practiceVersionRepository.undo(capturedPracticeVersion)
+                        else repository.undo(captured)
+                    }.onSuccess { revised ->
+                        if (revised is PracticeVersionDocument) {
+                            activePracticeVersion = revised
+                            inspectedPracticeVersion = revised
+                        } else if (revised is PersistentScoreSession) {
+                            state = WorkspaceLoadState.Ready(revised)
+                            activePracticeVersion = null
+                        }
+                    }.onFailure { editError = it.message ?: "无法撤销这次校正" }
+                } finally {
+                    editGate.leave()
+                    editInProgress = false
                 }
-                    .onFailure { editError = it.message ?: "无法撤销这次校正" }
-                editInProgress = false
             }
         }
     }
     val redoRevision: () -> Unit = {
         val capturedPracticeVersion = activePracticeVersion
         val captured = (state as? WorkspaceLoadState.Ready)?.session
-        if (captured != null) {
+        if (captured != null && editGate.tryEnter()) {
+            editInProgress = true
+            editError = null
             scope.launch {
-                editInProgress = true
-                editError = null
-                runCatching {
-                    if (capturedPracticeVersion != null) {
-                        practiceVersionRepository.redo(capturedPracticeVersion)
-                    } else {
-                        repository.redo(captured)
-                    }
-                }.onSuccess { revised ->
-                    if (revised is PracticeVersionDocument) {
-                        activePracticeVersion = revised
-                        inspectedPracticeVersion = revised
-                    } else if (revised is PersistentScoreSession) {
-                        state = WorkspaceLoadState.Ready(revised)
-                        activePracticeVersion = null
-                    }
+                try {
+                    runCatching {
+                        if (capturedPracticeVersion != null) practiceVersionRepository.redo(capturedPracticeVersion)
+                        else repository.redo(captured)
+                    }.onSuccess { revised ->
+                        if (revised is PracticeVersionDocument) {
+                            activePracticeVersion = revised
+                            inspectedPracticeVersion = revised
+                        } else if (revised is PersistentScoreSession) {
+                            state = WorkspaceLoadState.Ready(revised)
+                            activePracticeVersion = null
+                        }
+                    }.onFailure { editError = it.message ?: "无法重做这次校正" }
+                } finally {
+                    editGate.leave()
+                    editInProgress = false
                 }
-                    .onFailure { editError = it.message ?: "无法重做这次校正" }
-                editInProgress = false
             }
         }
     }
 
     LaunchedEffect(structureId, repository) {
         if (structureId == null) {
-            state = WorkspaceLoadState.Failed("请先在曲谱库选择一张单页图片并转换为练习谱")
+            playbackController.stop()
+            structureListLoading = true
+            structureListError = null
+            availableStructures = runCatching { repository.listStructures() }
+                .onFailure { structureListError = it.message ?: "无法读取练习谱列表" }
+                .getOrDefault(emptyList())
+            structureListLoading = false
             return@LaunchedEffect
         }
         state = WorkspaceLoadState.Loading
         state = runCatching { repository.open(structureId) }
             .fold(
-                onSuccess = { WorkspaceLoadState.Ready(it) },
+                onSuccess = {
+                    selectionStartMeasure = 1
+                    selectionEndMeasure = 1
+                    focusedMeasure = 1
+                    activePracticeVersion = null
+                    showSource = false
+                    WorkspaceLoadState.Ready(it)
+                },
                 onFailure = { WorkspaceLoadState.Failed(it.message ?: "无法读取结构化乐谱") },
             )
     }
@@ -324,7 +388,17 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
             .padding(contentPadding)
             .background(MaterialTheme.colorScheme.background),
     ) {
-        when (val currentState = state) {
+        if (structureId == null) {
+            WorkspaceScorePicker(
+                structures = availableStructures,
+                loading = structureListLoading,
+                error = structureListError,
+                autoRestoreEnabled = autoRestoreEnabled,
+                onSelectStructure = onSelectStructure,
+                onOpenLibrary = onOpenLibrary,
+                onAutoRestoreChange = onAutoRestoreChange,
+            )
+        } else when (val currentState = state) {
             WorkspaceLoadState.Loading -> LoadingWorkspace()
             is WorkspaceLoadState.Failed -> FailedWorkspace(currentState.message)
             is WorkspaceLoadState.Ready -> {
@@ -332,8 +406,9 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                 WorkspaceContent(
                     session = currentState.session,
                     practiceVersion = activePracticeVersion,
-                    selectedMeasure = selectedMeasure,
-                    playbackEndMeasure = playbackEndMeasure,
+                    selectionStartMeasure = selectionStartMeasure,
+                    selectionEndMeasure = selectionEndMeasure,
+                    focusedMeasure = focusedMeasure,
                     playerState = playerState,
                     playbackController = playbackController,
                     showSource = showSource,
@@ -347,13 +422,31 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                         aiVisible = false
                         showSource = !showSource
                     },
-                    onSelectMeasure = {
+                    onChooseAnotherScore = {
+                        if (midiSessionState.hasUnfinishedRecording) {
+                            midiSession.reportError("换谱前请先完成或取消本次跟弹")
+                            midiPracticeVisible = true
+                        } else {
+                            playbackController.stop()
+                            correctionVisible = false
+                            playbackSettingsVisible = false
+                            guidanceVisible = false
+                            practiceVersionsVisible = false
+                            midiPracticeVisible = false
+                            aiVisible = false
+                            onChooseAnotherScore()
+                        }
+                    },
+                    onRangeChange = { start, end ->
                         if (playerState.phase == ScorePlayerPhase.Playing || playerState.phase == ScorePlayerPhase.Paused) {
                             playbackController.stop()
                         }
-                        selectedMeasure = it
-                        playbackEndMeasure = it
+                        val range = WorkspaceMeasureSelection.normalizeRange(start, end, displayedScore.measureCount)
+                        selectionStartMeasure = range.first
+                        selectionEndMeasure = range.last
                     },
+                    onFocusMeasure = { focusedMeasure = it.coerceIn(1, displayedScore.measureCount) },
+                    scoreTapEnabled = !correctionVisible,
                     onOpenPlaybackSettings = {
                         playbackController.stop()
                         correctionVisible = false
@@ -371,8 +464,8 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                                 PlaybackPlanCompiler.compile(
                                     displayedScore,
                                     PlaybackSelection(
-                                        startMeasure = selectedMeasure,
-                                        endMeasure = playbackEndMeasure,
+                                        startMeasure = selectionStartMeasure,
+                                        endMeasure = selectionEndMeasure,
                                         hand = playbackHand,
                                         speed = playbackSpeed,
                                         looping = playbackLooping,
@@ -389,7 +482,7 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                         practiceVersionsVisible = false
                         midiPracticeVisible = false
                         aiVisible = false
-                        selectedEventId = displayedScore.eventsInMeasure(selectedMeasure).firstOrNull()?.id
+                        selectedEventId = displayedScore.eventsInMeasure(focusedMeasure).firstOrNull()?.id
                         editError = null
                         correctionVisible = true
                     },
@@ -435,16 +528,39 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                             PlaybackPlanCompiler.compile(
                                 displayedScore,
                                 PlaybackSelection(
-                                    startMeasure = selectedMeasure,
-                                    endMeasure = playbackEndMeasure,
+                                    startMeasure = selectionStartMeasure,
+                                    endMeasure = selectionEndMeasure,
                                     hand = playbackHand,
                                     speed = playbackSpeed,
                                     looping = false,
                                 ),
                             )
                         }.getOrNull()
+                        midiPlan?.let { plan ->
+                            if (!midiSessionState.hasUnfinishedRecording) {
+                                runCatching {
+                                    midiSession.configure(
+                                        MidiPracticeTarget(
+                                            structureId = currentState.session.structure.id,
+                                            sourceRevisionId = activePracticeVersion?.version?.baseRevisionId
+                                                ?: currentState.session.revision.id,
+                                            practiceVersionId = activePracticeVersion?.version?.id,
+                                            plan = plan,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
                         midiPracticeVisible = true
                     },
+                    midiSessionState = midiSessionState,
+                    onOpenActiveMidiPractice = { midiPracticeVisible = true },
+                    onFinishMidiPractice = {
+                        scope.launch {
+                            if (midiSession.finishRecording() != null) midiPracticeVisible = true
+                        }
+                    },
+                    onCancelMidiPractice = midiSession::cancelRecording,
                     mainExportBusy = mainExportBusy,
                     mainExportMessage = mainExportMessage,
                     mainExportFailed = mainExportFailed,
@@ -469,15 +585,34 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
         if (playbackSettingsVisible && ready != null) {
             PlaybackSettingsSheet(
                 score = displayedScore ?: ready.session.score,
-                startMeasure = selectedMeasure,
-                endMeasure = playbackEndMeasure,
+                startMeasure = selectionStartMeasure,
+                endMeasure = selectionEndMeasure,
                 speed = playbackSpeed,
                 hand = playbackHand,
                 looping = playbackLooping,
-                onEndMeasureChange = { playbackEndMeasure = it },
-                onSpeedChange = { playbackSpeed = it },
-                onHandChange = { playbackHand = it },
-                onLoopingChange = { playbackLooping = it },
+                onRangeChange = { start, end ->
+                    stopPlaybackIfActive()
+                    val range = WorkspaceMeasureSelection.normalizeRange(
+                        start,
+                        end,
+                        (displayedScore ?: ready.session.score).measureCount,
+                    )
+                    selectionStartMeasure = range.first
+                    selectionEndMeasure = range.last
+                },
+                onRangeChangeFinished = { focusedMeasure = it },
+                onSpeedChange = {
+                    stopPlaybackIfActive()
+                    playbackSpeed = it
+                },
+                onHandChange = {
+                    stopPlaybackIfActive()
+                    playbackHand = it
+                },
+                onLoopingChange = {
+                    stopPlaybackIfActive()
+                    playbackLooping = it
+                },
                 midiExportBusy = midiExportBusy,
                 midiExportMessage = midiExportMessage,
                 midiExportFailed = midiExportFailed,
@@ -503,7 +638,7 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
             val correctionScore = correctionPracticeVersion?.score ?: ready.session.score
             CorrectionSheet(
                 score = correctionScore,
-                measureIndex = selectedMeasure,
+                measureIndex = focusedMeasure,
                 revisionNumber = correctionPracticeVersion?.revisionNumber ?: ready.session.revisionNumber,
                 selectedEventId = selectedEventId,
                 editInProgress = editInProgress,
@@ -529,17 +664,22 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                     editInProgress = editInProgress,
                     onSelect = { revisionId ->
                         val captured = activePracticeVersion ?: return@PracticeVersionRevisionHistorySheet
+                        if (!editGate.tryEnter()) return@PracticeVersionRevisionHistorySheet
+                        editInProgress = true
+                        editError = null
                         scope.launch {
-                            editInProgress = true
-                            editError = null
-                            runCatching { practiceVersionRepository.checkout(captured, revisionId) }
-                                .onSuccess {
-                                    activePracticeVersion = it
-                                    inspectedPracticeVersion = it
-                                    historyVisible = false
-                                }
-                                .onFailure { editError = it.message ?: "无法切换练习版本修订" }
-                            editInProgress = false
+                            try {
+                                runCatching { practiceVersionRepository.checkout(captured, revisionId) }
+                                    .onSuccess {
+                                        activePracticeVersion = it
+                                        inspectedPracticeVersion = it
+                                        historyVisible = false
+                                    }
+                                    .onFailure { editError = it.message ?: "无法切换练习版本修订" }
+                            } finally {
+                                editGate.leave()
+                                editInProgress = false
+                            }
                         }
                     },
                     onDismiss = { if (!editInProgress) historyVisible = false },
@@ -550,17 +690,22 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                     editInProgress = editInProgress,
                     onSelect = { revisionId ->
                         val captured = (state as? WorkspaceLoadState.Ready)?.session ?: return@RevisionHistorySheet
+                        if (!editGate.tryEnter()) return@RevisionHistorySheet
+                        editInProgress = true
+                        editError = null
                         scope.launch {
-                            editInProgress = true
-                            editError = null
-                            runCatching { repository.checkout(captured, revisionId) }
-                                .onSuccess {
-                                    state = WorkspaceLoadState.Ready(it)
-                                    activePracticeVersion = null
-                                    historyVisible = false
-                                }
-                                .onFailure { editError = it.message ?: "无法切换修订版本" }
-                            editInProgress = false
+                            try {
+                                runCatching { repository.checkout(captured, revisionId) }
+                                    .onSuccess {
+                                        state = WorkspaceLoadState.Ready(it)
+                                        activePracticeVersion = null
+                                        historyVisible = false
+                                    }
+                                    .onFailure { editError = it.message ?: "无法切换修订版本" }
+                            } finally {
+                                editGate.leave()
+                                editInProgress = false
+                            }
                         }
                     },
                     onDismiss = { if (!editInProgress) historyVisible = false },
@@ -570,11 +715,11 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
         if (guidanceVisible && ready != null) {
             val guidanceScore = displayedScore ?: ready.session.score
             val guidanceXml = activePracticeVersion?.document?.xml ?: ready.session.xml
-            val analysis = remember(guidanceXml, selectedMeasure, playbackEndMeasure) {
+            val analysis = remember(guidanceXml, selectionStartMeasure, selectionEndMeasure) {
                 ScorePracticeAnalyzer.analyze(
                     guidanceScore,
-                    selectedMeasure,
-                    playbackEndMeasure.coerceAtLeast(selectedMeasure),
+                    selectionStartMeasure,
+                    selectionEndMeasure.coerceAtLeast(selectionStartMeasure),
                 )
             }
             PracticeGuidanceSheet(
@@ -587,8 +732,8 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                         PlaybackPlanCompiler.compile(
                             guidanceScore,
                             PlaybackSelection(
-                                startMeasure = selectedMeasure,
-                                endMeasure = playbackEndMeasure,
+                                startMeasure = selectionStartMeasure,
+                                endMeasure = selectionEndMeasure,
                                 hand = recommendation.hand,
                                 speed = recommendation.speed,
                                 looping = recommendation.looping,
@@ -605,39 +750,47 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
         }
         if (practiceVersionsVisible && ready != null) {
             PracticeVersionsSheet(
-                fromMeasure = selectedMeasure,
-                toMeasure = playbackEndMeasure,
+                fromMeasure = selectionStartMeasure,
+                toMeasure = selectionEndMeasure,
                 versions = practiceVersions,
                 inspected = inspectedPracticeVersion,
                 busy = practiceVersionBusy,
                 error = practiceVersionError,
                 onCreate = { preset ->
                     val captured = (state as? WorkspaceLoadState.Ready)?.session ?: return@PracticeVersionsSheet
+                    if (!practiceVersionGate.tryEnter()) return@PracticeVersionsSheet
+                    practiceVersionBusy = true
+                    practiceVersionError = null
                     scope.launch {
-                        practiceVersionBusy = true
-                        practiceVersionError = null
-                        runCatching {
-                            practiceVersionRepository.create(
-                                captured,
-                                PracticeEditPlan(preset, selectedMeasure, playbackEndMeasure),
-                            )
-                        }.onSuccess { created ->
-                            inspectedPracticeVersion = created
-                            practiceVersions = practiceVersionRepository.list(captured.structure.id)
-                        }.onFailure {
-                            practiceVersionError = it.message ?: "当前范围无法生成这个练习版本"
+                        try {
+                            runCatching {
+                                practiceVersionRepository.create(
+                                    captured,
+                                    PracticeEditPlan(preset, selectionStartMeasure, selectionEndMeasure),
+                                )
+                            }.onSuccess { created ->
+                                inspectedPracticeVersion = created
+                                practiceVersions = practiceVersionRepository.list(captured.structure.id)
+                            }.onFailure { practiceVersionError = it.message ?: "当前范围无法生成这个练习版本" }
+                        } finally {
+                            practiceVersionGate.leave()
+                            practiceVersionBusy = false
                         }
-                        practiceVersionBusy = false
                     }
                 },
                 onInspect = { id ->
+                    if (!practiceVersionGate.tryEnter()) return@PracticeVersionsSheet
+                    practiceVersionBusy = true
+                    practiceVersionError = null
                     scope.launch {
-                        practiceVersionBusy = true
-                        practiceVersionError = null
-                        runCatching { practiceVersionRepository.load(id) }
-                            .onSuccess { inspectedPracticeVersion = it }
-                            .onFailure { practiceVersionError = it.message ?: "无法读取练习版本" }
-                        practiceVersionBusy = false
+                        try {
+                            runCatching { practiceVersionRepository.load(id) }
+                                .onSuccess { inspectedPracticeVersion = it }
+                                .onFailure { practiceVersionError = it.message ?: "无法读取练习版本" }
+                        } finally {
+                            practiceVersionGate.leave()
+                            practiceVersionBusy = false
+                        }
                     }
                 },
                 onPreview = { document ->
@@ -645,47 +798,72 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                     activePracticeVersion = document
                     practiceVersionsVisible = false
                     showSource = false
-                    selectedMeasure = document.version.fromMeasure
-                    playbackEndMeasure = document.version.toMeasure
+                    selectionStartMeasure = document.version.fromMeasure
+                    selectionEndMeasure = document.version.toMeasure
+                    focusedMeasure = document.version.fromMeasure
                 },
                 onAccept = { id ->
+                    if (!practiceVersionGate.tryEnter()) return@PracticeVersionsSheet
+                    practiceVersionBusy = true
+                    practiceVersionError = null
                     scope.launch {
-                        practiceVersionBusy = true
-                        practiceVersionError = null
-                        runCatching { practiceVersionRepository.setStatus(id, PracticeVersionStatus.Accepted) }
-                            .onSuccess { accepted ->
-                                inspectedPracticeVersion = accepted
-                                if (activePracticeVersion?.version?.id == id) activePracticeVersion = accepted
-                                practiceVersions = practiceVersionRepository.list(ready.session.structure.id)
-                            }
-                            .onFailure { practiceVersionError = it.message ?: "无法采纳练习版本" }
-                        practiceVersionBusy = false
+                        try {
+                            runCatching { practiceVersionRepository.setStatus(id, PracticeVersionStatus.Accepted) }
+                                .onSuccess { accepted ->
+                                    inspectedPracticeVersion = accepted
+                                    if (activePracticeVersion?.version?.id == id) activePracticeVersion = accepted
+                                    practiceVersions = practiceVersionRepository.list(ready.session.structure.id)
+                                }
+                                .onFailure { practiceVersionError = it.message ?: "无法采纳练习版本" }
+                        } finally {
+                            practiceVersionGate.leave()
+                            practiceVersionBusy = false
+                        }
                     }
                 },
                 onReject = { id ->
+                    if (!practiceVersionGate.tryEnter()) return@PracticeVersionsSheet
+                    practiceVersionBusy = true
+                    practiceVersionError = null
                     scope.launch {
-                        practiceVersionBusy = true
-                        practiceVersionError = null
-                        runCatching { practiceVersionRepository.setStatus(id, PracticeVersionStatus.Rejected) }
-                            .onSuccess { rejected ->
-                                inspectedPracticeVersion = rejected
-                                if (activePracticeVersion?.version?.id == id) activePracticeVersion = null
-                                practiceVersions = practiceVersionRepository.list(ready.session.structure.id)
-                            }
-                            .onFailure { practiceVersionError = it.message ?: "无法拒绝练习版本" }
-                        practiceVersionBusy = false
+                        try {
+                            runCatching { practiceVersionRepository.setStatus(id, PracticeVersionStatus.Rejected) }
+                                .onSuccess { rejected ->
+                                    inspectedPracticeVersion = rejected
+                                    if (activePracticeVersion?.version?.id == id) activePracticeVersion = null
+                                    practiceVersions = practiceVersionRepository.list(ready.session.structure.id)
+                                }
+                                .onFailure { practiceVersionError = it.message ?: "无法拒绝练习版本" }
+                        } finally {
+                            practiceVersionGate.leave()
+                            practiceVersionBusy = false
+                        }
                     }
                 },
                 onExport = { version ->
-                    exportPracticeVersionId = version.id
-                    val safeName = version.title.replace(Regex("[\\\\/:*?\"<>|]"), "-")
-                    exportPracticeVersion.launch("$safeName.musicxml")
+                    if (practiceVersionGate.tryEnter()) {
+                        practiceVersionBusy = true
+                        practiceVersionError = null
+                        exportPracticeVersionId = version.id
+                        val safeName = version.title.replace(Regex("[\\\\/:*?\"<>|]"), "-")
+                        runCatching { exportPracticeVersion.launch("$safeName.musicxml") }
+                            .onFailure {
+                                exportPracticeVersionId = null
+                                practiceVersionGate.leave()
+                                practiceVersionBusy = false
+                                practiceVersionError = it.message ?: "无法打开导出位置"
+                            }
+                    }
                 },
                 onDismiss = { if (!practiceVersionBusy) practiceVersionsVisible = false },
             )
         }
         if (midiPracticeVisible && ready != null) {
-            val plan = midiPlan
+            val plan = if (midiSessionState.hasUnfinishedRecording) {
+                midiSessionState.target?.plan
+            } else {
+                midiSessionState.target?.plan ?: midiPlan
+            }
             if (plan == null) {
                 SimpleMessageSheet(
                     title = "无法开始跟弹",
@@ -694,9 +872,8 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                 )
             } else {
                 MidiPracticeSheet(
-                    structureId = ready.session.structure.id,
-                    sourceRevisionId = activePracticeVersion?.version?.baseRevisionId ?: ready.session.revision.id,
-                    practiceVersionId = activePracticeVersion?.version?.id,
+                    session = midiSession,
+                    sessionState = midiSessionState,
                     plan = plan,
                     onListen = {
                         playbackController.stop()
@@ -706,7 +883,8 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                     onOpenCorrection = {
                         midiPracticeVisible = false
                         activePracticeVersion = null
-                        selectedEventId = ready.session.score.eventsInMeasure(selectedMeasure).firstOrNull()?.id
+                        focusedMeasure = selectionStartMeasure
+                        selectedEventId = ready.session.score.eventsInMeasure(focusedMeasure).firstOrNull()?.id
                         editError = null
                         correctionVisible = true
                     },
@@ -719,19 +897,19 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
         }
         if (aiVisible && ready != null) {
             val aiScore = displayedScore ?: ready.session.score
-            val analysis = remember(aiScore, selectedMeasure, playbackEndMeasure) {
+            val analysis = remember(aiScore, selectionStartMeasure, selectionEndMeasure) {
                 ScorePracticeAnalyzer.analyze(
                     aiScore,
-                    selectedMeasure,
-                    playbackEndMeasure.coerceAtLeast(selectedMeasure),
+                    selectionStartMeasure,
+                    selectionEndMeasure.coerceAtLeast(selectionStartMeasure),
                 )
             }
             PracticeAiSheet(
                 score = aiScore,
                 analysis = analysis,
                 selection = PlaybackSelection(
-                    startMeasure = selectedMeasure,
-                    endMeasure = playbackEndMeasure,
+                    startMeasure = selectionStartMeasure,
+                    endMeasure = selectionEndMeasure,
                     hand = playbackHand,
                     speed = playbackSpeed,
                     looping = playbackLooping,
@@ -744,8 +922,8 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                         PlaybackPlanCompiler.compile(
                             aiScore,
                             PlaybackSelection(
-                                selectedMeasure,
-                                playbackEndMeasure,
+                                selectionStartMeasure,
+                                selectionEndMeasure,
                                 recommendation.hand,
                                 recommendation.speed,
                                 recommendation.looping,
@@ -757,7 +935,7 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                     { preset ->
                         val created = practiceVersionRepository.create(
                             ready.session,
-                            PracticeEditPlan(preset, selectedMeasure, playbackEndMeasure),
+                            PracticeEditPlan(preset, selectionStartMeasure, selectionEndMeasure),
                         )
                         inspectedPracticeVersion = created
                         practiceVersions = practiceVersionRepository.list(ready.session.structure.id)
@@ -773,6 +951,90 @@ fun StructuredScoreWorkspaceScreen(contentPadding: PaddingValues, structureId: S
                     aiVisible = false
                 },
             )
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceScorePicker(
+    structures: List<ScoreStructure>,
+    loading: Boolean,
+    error: String?,
+    autoRestoreEnabled: Boolean,
+    onSelectStructure: (String) -> Unit,
+    onOpenLibrary: () -> Unit,
+    onAutoRestoreChange: (Boolean) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp)) {
+        Text("选择练习谱", style = MaterialTheme.typography.headlineSmall)
+        Text(
+            "先选择要练习的谱面。最近练习排在最前，进入后也可随时换谱。",
+            modifier = Modifier.padding(top = 6.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("自动恢复上次练习", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    if (autoRestoreEnabled) "下次点开练习工作区时直接恢复最近一谱" else "当前默认：每次先选谱",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = autoRestoreEnabled, onCheckedChange = onAutoRestoreChange)
+        }
+        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+        when {
+            loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            error != null -> Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+            ) {
+                Text(error, modifier = Modifier.padding(16.dp))
+            }
+            structures.isEmpty() -> Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text("还没有可练习的结构化琴谱", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "请先从曲谱库导入图片或 PDF，并完成识谱转换。",
+                    modifier = Modifier.padding(top = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(onClick = onOpenLibrary, modifier = Modifier.padding(top = 16.dp)) { Text("前往曲谱库") }
+            }
+            else -> LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(structures, key = ScoreStructure::id) { structure ->
+                    Card(onClick = { onSelectStructure(structure.id) }, modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(structure.title, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    if (structure == structures.first()) "最近练习" else "结构化练习谱",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Text("打开", color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+                item { Button(onClick = onOpenLibrary, modifier = Modifier.fillMaxWidth()) { Text("从曲谱库添加练习谱") } }
+            }
         }
     }
 }
@@ -811,13 +1073,17 @@ private fun FailedWorkspace(message: String) {
 private fun WorkspaceContent(
     session: PersistentScoreSession,
     practiceVersion: PracticeVersionDocument?,
-    selectedMeasure: Int,
-    playbackEndMeasure: Int,
+    selectionStartMeasure: Int,
+    selectionEndMeasure: Int,
+    focusedMeasure: Int,
     playerState: ScorePlayerUiState,
     playbackController: AlphaTabPlaybackController,
     showSource: Boolean,
     onToggleSource: () -> Unit,
-    onSelectMeasure: (Int) -> Unit,
+    onChooseAnotherScore: () -> Unit,
+    onRangeChange: (Int, Int) -> Unit,
+    onFocusMeasure: (Int) -> Unit,
+    scoreTapEnabled: Boolean,
     onOpenPlaybackSettings: () -> Unit,
     onTogglePlayback: () -> Unit,
     onStopPlayback: () -> Unit,
@@ -826,6 +1092,10 @@ private fun WorkspaceContent(
     onOpenPracticeVersions: () -> Unit,
     onExitPracticeVersion: () -> Unit,
     onOpenMidiPractice: () -> Unit,
+    midiSessionState: WorkspaceMidiSessionState,
+    onOpenActiveMidiPractice: () -> Unit,
+    onFinishMidiPractice: () -> Unit,
+    onCancelMidiPractice: () -> Unit,
     mainExportBusy: Boolean,
     mainExportMessage: String?,
     mainExportFailed: Boolean,
@@ -836,7 +1106,10 @@ private fun WorkspaceContent(
 ) {
     val displayedDocument = practiceVersion?.document ?: session.document
     val displayedScore = displayedDocument.score
-    val summary = displayedScore.toSummary()
+    val summary = displayedDocument.summary
+    val focusedMeasureEventCount = remember(displayedScore, focusedMeasure) {
+        displayedScore.eventsInMeasure(focusedMeasure).size
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         ScoreMetadata(
             summary = summary,
@@ -845,13 +1118,17 @@ private fun WorkspaceContent(
             hasSource = session.sourcePage != null,
             showSource = showSource,
             onToggleSource = onToggleSource,
+            onChooseAnotherScore = onChooseAnotherScore,
             onOpenHistory = onOpenHistory,
         )
-        MeasureSelector(
+        MeasureRangeSelector(
             measureCount = summary.measureCount,
-            selectedMeasure = selectedMeasure,
+            selectionStartMeasure = selectionStartMeasure,
+            selectionEndMeasure = selectionEndMeasure,
+            focusedMeasure = focusedMeasure,
             playbackMeasure = playerState.currentMeasure,
-            onSelectMeasure = onSelectMeasure,
+            onRangeChange = onRangeChange,
+            onFocusMeasure = onFocusMeasure,
         )
         HorizontalDivider()
         if (showSource && session.sourcePage != null) {
@@ -860,17 +1137,39 @@ private fun WorkspaceContent(
             ScoreRenderer(
                 xml = displayedDocument.xml,
                 score = displayedScore,
-                selectedMeasure = selectedMeasure,
+                focusedMeasure = focusedMeasure,
+                playbackMeasure = playerState.currentMeasure,
                 playbackController = playbackController,
+                liveFeedback = midiSessionState.liveFeedback.takeIf { midiSessionState.hasUnfinishedRecording },
+                scoreTapEnabled = scoreTapEnabled,
+                onMeasureTap = { measure ->
+                    val next = WorkspaceMeasureSelection(
+                        selectionStartMeasure,
+                        selectionEndMeasure,
+                        focusedMeasure,
+                    ).afterScoreTap(measure, summary.measureCount)
+                    onRangeChange(next.selectionStartMeasure, next.selectionEndMeasure)
+                    onFocusMeasure(next.focusedMeasure)
+                },
                 modifier = Modifier.weight(1f),
             )
         }
         HorizontalDivider()
+        if (midiSessionState.hasUnfinishedRecording) {
+            MidiPracticeControlBar(
+                state = midiSessionState,
+                onExpand = onOpenActiveMidiPractice,
+                onFinish = onFinishMidiPractice,
+                onCancel = onCancelMidiPractice,
+            )
+            HorizontalDivider()
+        }
         SelectedMeasureStatus(
-            selectedMeasure = selectedMeasure,
-            eventCount = displayedScore.eventsInMeasure(selectedMeasure).size,
+            focusedMeasure = focusedMeasure,
+            selectionStartMeasure = selectionStartMeasure,
+            eventCount = focusedMeasureEventCount,
             statusMessage = practiceVersion?.recoveryMessage ?: session.recoveryMessage,
-            playbackEndMeasure = playbackEndMeasure,
+            selectionEndMeasure = selectionEndMeasure,
             playerState = playerState,
             canUndo = practiceVersion?.canUndo ?: session.canUndo,
             canRedo = practiceVersion?.canRedo ?: session.canRedo,
@@ -903,6 +1202,7 @@ private fun ScoreMetadata(
     hasSource: Boolean,
     showSource: Boolean,
     onToggleSource: () -> Unit,
+    onChooseAnotherScore: () -> Unit,
     onOpenHistory: () -> Unit,
 ) {
     Row(
@@ -929,6 +1229,7 @@ private fun ScoreMetadata(
             if (hasSource) {
                 TextButton(onClick = onToggleSource) { Text(if (showSource) "练习谱" else "原谱") }
             }
+            TextButton(onClick = onChooseAnotherScore) { Text("换谱") }
         }
     }
 }
@@ -946,31 +1247,126 @@ private fun OriginalScoreView(source: SourceScorePage, modifier: Modifier = Modi
 }
 
 @Composable
-private fun MeasureSelector(
+private fun MeasureRangeSelector(
     measureCount: Int,
-    selectedMeasure: Int,
+    selectionStartMeasure: Int,
+    selectionEndMeasure: Int,
+    focusedMeasure: Int,
     playbackMeasure: Int?,
-    onSelectMeasure: (Int) -> Unit,
+    onRangeChange: (Int, Int) -> Unit,
+    onFocusMeasure: (Int) -> Unit,
 ) {
+    var pendingFocus by remember { mutableIntStateOf(selectionStartMeasure) }
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        (1..measureCount).forEach { measure ->
-            AssistChip(
-                onClick = { onSelectMeasure(measure) },
-                label = { Text("第 $measure 小节") },
-                leadingIcon = when (measure) {
-                    playbackMeasure -> ({ Text("▶") })
-                    selectedMeasure -> ({ Text("●") })
-                    else -> null
+        Text("起", style = MaterialTheme.typography.labelSmall)
+        CompactMeasureButton(
+            label = "−",
+            onClick = {
+                val next = (selectionStartMeasure - 1).coerceAtLeast(1)
+                onRangeChange(next, selectionEndMeasure)
+                onFocusMeasure(next)
+            },
+            enabled = selectionStartMeasure > 1,
+        )
+        Text("$selectionStartMeasure", style = MaterialTheme.typography.labelLarge)
+        CompactMeasureButton(
+            label = "+",
+            onClick = {
+                val next = (selectionStartMeasure + 1).coerceAtMost(measureCount)
+                onRangeChange(next, selectionEndMeasure.coerceAtLeast(next))
+                onFocusMeasure(next)
+            },
+            enabled = selectionStartMeasure < measureCount,
+        )
+        if (measureCount > 1) {
+            RangeSlider(
+                value = selectionStartMeasure.toFloat()..selectionEndMeasure.toFloat(),
+                onValueChange = { range ->
+                    val start = range.start.roundToInt().coerceIn(1, measureCount)
+                    val end = range.endInclusive.roundToInt().coerceIn(start, measureCount)
+                    pendingFocus = if (start != selectionStartMeasure) start else end
+                    onRangeChange(start, end)
                 },
+                onValueChangeFinished = { onFocusMeasure(pendingFocus) },
+                valueRange = 1f..measureCount.toFloat(),
+                modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
+            )
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
+        Text("止", style = MaterialTheme.typography.labelSmall)
+        CompactMeasureButton(
+            label = "−",
+            onClick = {
+                val next = (selectionEndMeasure - 1).coerceAtLeast(1)
+                onRangeChange(selectionStartMeasure.coerceAtMost(next), next)
+                onFocusMeasure(next)
+            },
+            enabled = selectionEndMeasure > 1,
+        )
+        Text("$selectionEndMeasure", style = MaterialTheme.typography.labelLarge)
+        CompactMeasureButton(
+            label = "+",
+            onClick = {
+                val next = (selectionEndMeasure + 1).coerceAtMost(measureCount)
+                onRangeChange(selectionStartMeasure, next)
+                onFocusMeasure(next)
+            },
+            enabled = selectionEndMeasure < measureCount,
+        )
+        Text(
+            playbackMeasure?.let { "播$it" } ?: "看$focusedMeasure",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+        CompactMeasureAction(
+            label = "当前",
+            onClick = {
+                onRangeChange(focusedMeasure, focusedMeasure)
+                onFocusMeasure(focusedMeasure)
+            },
+        )
+        CompactMeasureAction(
+            label = "全篇",
+            onClick = {
+                onRangeChange(1, measureCount)
+                onFocusMeasure(1)
+            },
+        )
+    }
+}
+
+@Composable
+private fun CompactMeasureButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.size(28.dp).clickable(enabled = enabled, onClick = onClick),
+        shape = MaterialTheme.shapes.small,
+        color = if (enabled) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.outline,
             )
         }
     }
+}
+
+@Composable
+private fun CompactMeasureAction(label: String, onClick: () -> Unit) {
+    Text(
+        label,
+        modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 5.dp, vertical = 3.dp),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.primary,
+    )
 }
 
 @Composable
@@ -978,11 +1374,17 @@ private fun MeasureSelector(
 private fun ScoreRenderer(
     xml: String,
     score: ScoreIr,
-    selectedMeasure: Int,
+    focusedMeasure: Int,
+    playbackMeasure: Int?,
     playbackController: AlphaTabPlaybackController,
+    liveFeedback: LivePerformanceFeedback? = null,
+    scoreTapEnabled: Boolean = false,
+    onMeasureTap: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var renderState by remember(xml) { mutableStateOf<ScoreRenderState>(ScoreRenderState.Loading) }
+    val currentScoreTapEnabled = rememberUpdatedState(scoreTapEnabled)
+    val currentOnMeasureTap = rememberUpdatedState(onMeasureTap)
     Box(modifier = modifier.fillMaxSize()) {
         key(xml) {
             AndroidView(
@@ -990,8 +1392,31 @@ private fun ScoreRenderer(
                 factory = { viewContext ->
                     AlphaTabView(viewContext, null).apply {
                         var loadStarted = false
+                        AlphaTabScoreTapBridge.register(
+                            owner = this,
+                            touchSlop = ViewConfiguration.get(viewContext).scaledTouchSlop,
+                        ) { rawX, rawY ->
+                            if (currentScoreTapEnabled.value) {
+                                hitTestMeasure(rawX, rawY, score.measureCount)?.let(currentOnMeasureTap.value)
+                            }
+                        }
                         settings.player.enableCursor = true
                         settings.player.enableElementHighlighting = true
+                        settings.player.configureGpianoScrolling()
+                        api.customScrollHandler = object : IScrollHandler {
+                            override fun forceScrollTo(currentBeatBounds: BeatBounds) = Unit
+
+                            override fun onBeatCursorUpdating(
+                                startBeat: BeatBounds,
+                                endBeat: BeatBounds?,
+                                cursorMode: MidiTickLookupFindBeatResultCursorMode,
+                                actualBeatCursorStartX: Double,
+                                actualBeatCursorEndX: Double,
+                                actualBeatCursorTransitionDuration: Double,
+                            ) = Unit
+
+                            override fun close() = Unit
+                        }
                         settings.notation.elements.set(NotationElement.TrackNames, false)
                         settings.notation.elements.set(NotationElement.ScoreTitle, false)
                         settings.notation.elements.set(NotationElement.ScoreSubTitle, false)
@@ -1002,6 +1427,7 @@ private fun ScoreRenderer(
                         settings.notation.elements.set(NotationElement.ScoreWordsAndMusic, false)
                         settings.notation.elements.set(NotationElement.ScoreCopyright, false)
                         settings.display.padding = DoubleList(0.0, 0.0, 0.0, 0.0)
+                        var scrollBridgeInstalled = false
                         playbackController.attach(
                             this,
                             score.parts.associate { part ->
@@ -1014,17 +1440,13 @@ private fun ScoreRenderer(
                                     )
                             },
                         )
-                        api.renderStarted.on { isResize ->
-                            Log.d("GpianoAlphaTab", "renderStarted: resize=$isResize, view=${width}x${height}")
-                        }
-                        api.renderFinished.on { result ->
-                            Log.d(
-                                "GpianoAlphaTab",
-                                "renderFinished: ${result.totalWidth}x${result.totalHeight}, " +
-                                    "part=${result.width}x${result.height}",
-                            )
+                        api.renderFinished.on { _ ->
                             post {
                                 renderState = ScoreRenderState.Ready
+                                if (!scrollBridgeInstalled) {
+                                    stabilizeGpianoLazyRendering()
+                                    scrollBridgeInstalled = true
+                                }
                                 playbackController.markScoreRendered()
                                 scrollToMeasure(tag as? Int ?: 1)
                             }
@@ -1048,9 +1470,10 @@ private fun ScoreRenderer(
                                             uint8Constructor.newInstance(bytes, null) as Uint8Array,
                                             api.settings,
                                         )
+                                        AlphaTabPlaybackTimeline.normalizeOverfullMeasures(score)
+                                        score.ensureDistinctPlaybackChannels()
                                         val trackIndexes = DoubleList()
                                         for (track in score.tracks) trackIndexes.push(track.index)
-                                        Log.d("GpianoAlphaTab", "parsed score: tracks=${score.tracks.count()}")
                                         api.renderScore(score, trackIndexes)
                                     }.onFailure { error ->
                                         Log.e("GpianoAlphaTab", "MusicXML parse failed", error)
@@ -1064,12 +1487,19 @@ private fun ScoreRenderer(
                     }
                 },
                 update = { view ->
-                    view.tag = selectedMeasure
-                    if (renderState is ScoreRenderState.Ready) view.scrollToMeasure(selectedMeasure)
+                    val targetMeasure = liveFeedback?.currentMeasure ?: playbackMeasure ?: focusedMeasure
+                    if (view.tag != targetMeasure) {
+                        view.tag = targetMeasure
+                        if (renderState is ScoreRenderState.Ready) view.scrollToMeasure(targetMeasure)
+                    }
                 },
-                onRelease = { view -> playbackController.detach(view) },
+                onRelease = { view ->
+                    AlphaTabScoreTapBridge.unregister(view)
+                    playbackController.detach(view)
+                },
             )
         }
+        liveFeedback?.let { LiveScoreFeedbackOverlay(it) }
         when (val current = renderState) {
             ScoreRenderState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
@@ -1087,10 +1517,11 @@ private fun ScoreRenderer(
 
 @Composable
 private fun SelectedMeasureStatus(
-    selectedMeasure: Int,
+    focusedMeasure: Int,
+    selectionStartMeasure: Int,
     eventCount: Int,
     statusMessage: String?,
-    playbackEndMeasure: Int,
+    selectionEndMeasure: Int,
     playerState: ScorePlayerUiState,
     canUndo: Boolean,
     canRedo: Boolean,
@@ -1119,7 +1550,7 @@ private fun SelectedMeasureStatus(
         ) {
             if (showSource) {
                 Text(
-                    "原谱对照 · 第 $selectedMeasure 小节",
+                    "原谱对照 · 第 $focusedMeasure 小节",
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1130,7 +1561,7 @@ private fun SelectedMeasureStatus(
             if (practiceVersion != null) {
                 Text(
                     statusMessage ?: playerState.error ?: playerState.currentMeasure?.let { "派生版播放第 $it 小节" }
-                    ?: "${practiceVersionStatusLabel(practiceVersion.status)} · 第 $selectedMeasure 小节",
+                    ?: "${practiceVersionStatusLabel(practiceVersion.status)} · 第 $focusedMeasure 小节",
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1144,7 +1575,7 @@ private fun SelectedMeasureStatus(
                     TextButton(onClick = onOpenGuidance) { Text("指导") }
                     TextButton(onClick = onOpenMidiPractice) { Text("跟弹") }
                     TextButton(onClick = onOpenPlaybackSettings) {
-                        Text(if (selectedMeasure == playbackEndMeasure) "范围" else "$selectedMeasure–$playbackEndMeasure")
+                        Text(if (selectionStartMeasure == selectionEndMeasure) "范围" else "$selectionStartMeasure–$selectionEndMeasure")
                     }
                     if (playerState.phase == ScorePlayerPhase.Playing || playerState.phase == ScorePlayerPhase.Paused) {
                         TextButton(onClick = onStopPlayback) { Text("停止") }
@@ -1164,7 +1595,7 @@ private fun SelectedMeasureStatus(
             }
             Text(
                 mainExportMessage ?: statusMessage ?: playerState.error ?: playerState.currentMeasure?.let { "播放第 $it 小节" }
-                ?: "第 $selectedMeasure 小节 · $eventCount 个事件",
+                ?: "第 $focusedMeasure 小节 · $eventCount 个事件",
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodySmall,
                 color = if (mainExportFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1182,7 +1613,7 @@ private fun SelectedMeasureStatus(
                     Text(if (mainExportBusy) "导出中" else "导出")
                 }
                 TextButton(onClick = onOpenPlaybackSettings) {
-                    Text(if (selectedMeasure == playbackEndMeasure) "范围" else "$selectedMeasure–$playbackEndMeasure")
+                    Text(if (selectionStartMeasure == selectionEndMeasure) "范围" else "$selectionStartMeasure–$selectionEndMeasure")
                 }
                 if (playerState.phase == ScorePlayerPhase.Playing || playerState.phase == ScorePlayerPhase.Paused) {
                     TextButton(onClick = onStopPlayback) { Text("停止") }
@@ -1338,7 +1769,8 @@ private fun PlaybackSettingsSheet(
     speed: Double,
     hand: PlaybackHand,
     looping: Boolean,
-    onEndMeasureChange: (Int) -> Unit,
+    onRangeChange: (Int, Int) -> Unit,
+    onRangeChangeFinished: (Int) -> Unit,
     onSpeedChange: (Double) -> Unit,
     onHandChange: (PlaybackHand) -> Unit,
     onLoopingChange: (Boolean) -> Unit,
@@ -1349,6 +1781,7 @@ private fun PlaybackSettingsSheet(
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var pendingRangeFocus by remember { mutableIntStateOf(startMeasure) }
     val plan = remember(score, startMeasure, endMeasure, speed, hand, looping) {
         runCatching {
             PlaybackPlanCompiler.compile(
@@ -1364,7 +1797,7 @@ private fun PlaybackSettingsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.66f)
+                .fillMaxHeight(0.82f)
                 .padding(horizontal = 16.dp),
         ) {
             Row(
@@ -1391,13 +1824,69 @@ private fun PlaybackSettingsSheet(
             ) {
                 Text("从第 $startMeasure 小节到第 $endMeasure 小节", modifier = Modifier.weight(1f))
                 TextButton(
-                    onClick = { onEndMeasureChange((endMeasure - 1).coerceAtLeast(startMeasure)) },
-                    enabled = endMeasure > startMeasure,
-                ) { Text("−") }
+                    onClick = {
+                        onRangeChange(startMeasure, startMeasure)
+                        onRangeChangeFinished(startMeasure)
+                    },
+                ) { Text("当前小节") }
                 TextButton(
-                    onClick = { onEndMeasureChange((endMeasure + 1).coerceAtMost(score.measureCount)) },
+                    onClick = {
+                        onRangeChange(1, score.measureCount)
+                        onRangeChangeFinished(1)
+                    },
+                ) { Text("全篇") }
+            }
+            if (score.measureCount > 1) {
+                RangeSlider(
+                    value = startMeasure.toFloat()..endMeasure.toFloat(),
+                    onValueChange = { range ->
+                        val start = range.start.roundToInt().coerceIn(1, score.measureCount)
+                        val end = range.endInclusive.roundToInt().coerceIn(start, score.measureCount)
+                        pendingRangeFocus = if (start != startMeasure) start else end
+                        onRangeChange(start, end)
+                    },
+                    onValueChangeFinished = { onRangeChangeFinished(pendingRangeFocus) },
+                    valueRange = 1f..score.measureCount.toFloat(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                TextButton(
+                    onClick = {
+                        val next = (startMeasure - 1).coerceAtLeast(1)
+                        onRangeChange(next, endMeasure)
+                        onRangeChangeFinished(next)
+                    },
+                    enabled = startMeasure > 1,
+                ) { Text("起点 −") }
+                TextButton(
+                    onClick = {
+                        val next = (startMeasure + 1).coerceAtMost(score.measureCount)
+                        onRangeChange(next, endMeasure.coerceAtLeast(next))
+                        onRangeChangeFinished(next)
+                    },
+                    enabled = startMeasure < score.measureCount,
+                ) { Text("起点 +") }
+                TextButton(
+                    onClick = {
+                        val next = (endMeasure - 1).coerceAtLeast(1)
+                        onRangeChange(startMeasure.coerceAtMost(next), next)
+                        onRangeChangeFinished(next)
+                    },
+                    enabled = endMeasure > 1,
+                ) { Text("终点 −") }
+                TextButton(
+                    onClick = {
+                        val next = (endMeasure + 1).coerceAtMost(score.measureCount)
+                        onRangeChange(startMeasure, next)
+                        onRangeChangeFinished(next)
+                    },
                     enabled = endMeasure < score.measureCount,
-                ) { Text("+") }
+                ) { Text("终点 +") }
             }
 
             Text("速度", modifier = Modifier.padding(top = 10.dp), style = MaterialTheme.typography.titleSmall)
@@ -1431,7 +1920,7 @@ private fun PlaybackSettingsSheet(
                 )
             }
             Text(
-                "点击谱面上方的小节可更换起点；试听时会使用谱面游标跟随当前拍位。",
+                "可直接选择起止小节；试听时会使用谱面游标跟随当前拍位。",
                 modifier = Modifier.padding(top = 12.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1484,7 +1973,7 @@ private fun CorrectionSheet(
     canRedo: Boolean,
     onDismiss: () -> Unit,
 ) {
-    val events = score.eventsInMeasure(measureIndex)
+    val events = remember(score, measureIndex) { score.eventsInMeasure(measureIndex) }
     val selectedEvent = events.firstOrNull { it.id == selectedEventId }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -1672,7 +2161,7 @@ private fun DurationCorrectionEditor(
                 ) + listOfNotNull(current)
             ).distinct().filter { runCatching { it.toDivisions(measure.divisions) }.isSuccess }
     }
-    var draft by remember(event.id, event.durationDivisions) {
+    var draft by rememberSaveable(event.id, event.durationDivisions, stateSaver = MusicalDurationSaver) {
         mutableStateOf(current ?: candidates.first())
     }
     Text("时值", style = MaterialTheme.typography.titleSmall)
@@ -1705,7 +2194,7 @@ private fun RestToNoteEditor(
     editInProgress: Boolean,
     onApply: (ScorePitch) -> Unit,
 ) {
-    var draft by remember(event.id) { mutableStateOf(ScorePitch('C', 0, 4)) }
+    var draft by rememberSaveable(event.id, stateSaver = ScorePitchSaver) { mutableStateOf(ScorePitch('C', 0, 4)) }
     Text("休止符", style = MaterialTheme.typography.titleSmall)
     Text(
         "选择要恢复的音高",
@@ -1728,7 +2217,7 @@ private fun PitchCorrectionEditor(
     onApply: (ScorePitch) -> Unit,
 ) {
     val original = requireNotNull(event.pitch)
-    var draft by remember(event.id, original) { mutableStateOf(original) }
+    var draft by rememberSaveable(event.id, original, stateSaver = ScorePitchSaver) { mutableStateOf(original) }
     Text("音高", style = MaterialTheme.typography.titleSmall)
     Text(
         "当前 ${original.displayName} · MIDI ${original.midi}",
@@ -1958,20 +2447,315 @@ private fun revisionDescription(kind: String, operationJson: String?): String {
 @OptIn(ExperimentalContracts::class, ExperimentalUnsignedTypes::class)
 private fun AlphaTabView.scrollToMeasure(measure: Int) {
     val bounds = api.boundsLookup?.findMasterBarByIndex((measure - 1).toDouble()) ?: return
-    val scrollView = findViewById<ScrollView>(AlphaTabR.id.innerScroll) ?: return
-    scrollView.post {
-        Log.d(
-            "GpianoAlphaTab",
-            "measure=$measure visual=${bounds.visualBounds.y}/${bounds.visualBounds.h}, " +
-                "real=${bounds.realBounds.y}/${bounds.realBounds.h}, " +
-                "line=${bounds.lineAlignedBounds.y}/${bounds.lineAlignedBounds.h}, " +
-                "scroll=${scrollView.scrollY}, child=${scrollView.getChildAt(0)?.height}, " +
-                "viewport=${scrollView.height}",
-        )
+    val verticalScroll = findViewById<ScrollView>(AlphaTabR.id.innerScroll) ?: return
+    val horizontalScroll = findViewById<HorizontalScrollView>(AlphaTabR.id.outerScroll) ?: return
+    verticalScroll.post {
+        val density = resources.displayMetrics.density
+        val targetX = (bounds.visualBounds.x * density)
+            .roundToInt()
+            .minus((32 * density).roundToInt())
+            .coerceAtLeast(0)
         val targetY = (bounds.visualBounds.y * resources.displayMetrics.density)
             .roundToInt()
             .minus((32 * resources.displayMetrics.density).roundToInt())
             .coerceAtLeast(0)
-        scrollView.smoothScrollTo(0, targetY)
+        horizontalScroll.scrollTo(targetX, 0)
+        verticalScroll.scrollTo(0, targetY)
     }
 }
+
+@OptIn(ExperimentalContracts::class, ExperimentalUnsignedTypes::class)
+private fun AlphaTabView.hitTestMeasure(rawX: Float, rawY: Float, measureCount: Int): Int? {
+    val lookup = api.boundsLookup ?: return null
+    val verticalScroll = findViewById<ScrollView>(AlphaTabR.id.innerScroll) ?: return null
+    val horizontalScroll = findViewById<HorizontalScrollView>(AlphaTabR.id.outerScroll) ?: return null
+    val density = resources.displayMetrics.density
+    val viewportLocation = IntArray(2)
+    getLocationOnScreen(viewportLocation)
+    if (!AlphaTabHitCoordinates.isInsideViewport(
+            rawX,
+            rawY,
+            viewportLocation[0],
+            viewportLocation[1],
+            width,
+            height,
+        )
+    ) {
+        return null
+    }
+    val contentX = AlphaTabHitCoordinates.toContent(rawX, viewportLocation[0], horizontalScroll.scrollX, density)
+    val contentY = AlphaTabHitCoordinates.toContent(rawY, viewportLocation[1], verticalScroll.scrollY, density)
+    for (index in 0 until measureCount) {
+        val bounds = lookup.findMasterBarByIndex(index.toDouble()) ?: continue
+        val xBounds = bounds.visualBounds
+        val yBounds = bounds.lineAlignedBounds
+        val insideX = contentX >= xBounds.x && contentX <= xBounds.x + xBounds.w
+        val insideY = contentY >= yBounds.y && contentY <= yBounds.y + yBounds.h
+        if (insideX && insideY) return index + 1
+    }
+    return lookup.getBeatAtPos(contentX, contentY)?.voice?.bar?.masterBar?.index?.toInt()?.plus(1)
+}
+
+@Composable
+private fun LiveScoreFeedbackOverlay(feedback: LivePerformanceFeedback) {
+    val visible = feedback.notes.filter { it.measureIndex == feedback.currentMeasure }.takeLast(12)
+    if (visible.isEmpty()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp)
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
+    ) {
+        visible.forEach { note ->
+            val color = when (note.kind) {
+                LiveFeedbackKind.Target -> Color(0xFFFFD54F)
+                LiveFeedbackKind.Correct -> Color(0xFF66BB6A)
+                LiveFeedbackKind.Incorrect, LiveFeedbackKind.Missing -> Color(0xFFEF5350)
+            }
+            Surface(color = color, shape = MaterialTheme.shapes.small) {
+                Text(
+                    midiPitchLabel(note.midiPitch),
+                    color = Color.Black,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MidiPracticeControlBar(
+    state: WorkspaceMidiSessionState,
+    onExpand: () -> Unit,
+    onFinish: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val plan = state.target?.plan
+    val expected = plan?.let(PerformanceMatcher::expectedAttacks)?.size ?: 0
+    val currentMeasure = plan?.selection?.startMeasure
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                state.capture.selectedDeviceName ?: "MIDI 跟弹",
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Text(
+                if (state.phase == MidiPracticePhase.CountIn) {
+                    "一小节倒计时 · ${state.countInBeat ?: 1}"
+                } else if (state.capture.captureInterrupted) {
+                    "设备已中断 · 已保留 ${state.capture.capturedNoteCount} 个按键"
+                } else {
+                    val feedback = state.liveFeedback
+                    "第 ${feedback?.currentMeasure ?: currentMeasure ?: "-"} 小节 · " +
+                        "${feedback?.completedCount ?: state.capture.capturedNoteCount}/$expected"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (state.capture.captureInterrupted) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+            state.liveFeedback?.let { feedback ->
+                LinearProgressIndicator(
+                    progress = { feedback.progress },
+                    modifier = Modifier.fillMaxWidth().padding(top = 3.dp),
+                )
+            }
+        }
+        TextButton(onClick = onExpand) { Text("设置") }
+        Button(onClick = onFinish, enabled = !state.busy && state.canFinishRecording) { Text("完成") }
+        TextButton(onClick = onCancel, enabled = !state.busy) { Text("取消") }
+    }
+}
+
+@OptIn(ExperimentalContracts::class, ExperimentalUnsignedTypes::class)
+private fun AlphaTabScore.ensureDistinctPlaybackChannels() {
+    val usedChannels = mutableSetOf<Int>()
+    for (track in tracks) {
+        val info = track.playbackInfo
+        val requestedPrimary = info.primaryChannel.toInt()
+        val channelAllowed = { channel: Int ->
+            channel in 0..15 && (track.isPercussion || channel != 9)
+        }
+        val primary = requestedPrimary.takeIf { channelAllowed(it) && it !in usedChannels }
+            ?: (0..15).firstOrNull { channelAllowed(it) && it !in usedChannels }
+            ?: requestedPrimary.coerceIn(0, 15)
+        info.primaryChannel = primary.toDouble()
+        usedChannels += primary
+
+        val requestedSecondary = info.secondaryChannel.toInt()
+        val secondary = when {
+            requestedSecondary == requestedPrimary && requestedPrimary == primary -> primary
+            channelAllowed(requestedSecondary) && requestedSecondary !in usedChannels -> requestedSecondary
+            else -> primary
+        }
+        info.secondaryChannel = secondary.toDouble()
+        usedChannels += secondary
+    }
+}
+
+@OptIn(ExperimentalContracts::class, ExperimentalUnsignedTypes::class)
+private fun AlphaTabView.stabilizeGpianoLazyRendering() {
+    val renderSurface = findViewById<View>(AlphaTabR.id.renderSurface) ?: return
+    val alphaTabScrollListener = renderSurface as? View.OnScrollChangeListener ?: return
+    val verticalScroll = findViewById<ScrollView>(AlphaTabR.id.innerScroll) ?: return
+    val horizontalScroll = findViewById<HorizontalScrollView>(AlphaTabR.id.outerScroll) ?: return
+    // alphaTab 1.8.3 drops scroll callbacks while its render surface is
+    // waiting for a partial bitmap. Keep the bridge tied to that state so a
+    // fling cannot permanently lose the offset between two layouts.
+    val layoutDirtyField = runCatching {
+        renderSurface.javaClass.getDeclaredField("_layoutDirty").apply { isAccessible = true }
+    }.getOrNull()
+
+    fun alphaTabLayoutDirty(): Boolean = runCatching {
+        layoutDirtyField?.getBoolean(renderSurface) ?: false
+    }.getOrDefault(false)
+
+    var deliveredVerticalY = verticalScroll.scrollY
+    var deliveredHorizontalX = horizontalScroll.scrollX
+    var syncPosted = false
+    lateinit var postScrollSync: () -> Unit
+
+    fun relayoutRenderSurfaceNow() {
+        if (renderSurface.width <= 0 || renderSurface.height <= 0) return
+        runCatching {
+            renderSurface.forceLayout()
+            renderSurface.measure(
+                View.MeasureSpec.makeMeasureSpec(renderSurface.width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(renderSurface.height, View.MeasureSpec.EXACTLY),
+            )
+            renderSurface.layout(
+                renderSurface.left,
+                renderSurface.top,
+                renderSurface.right,
+                renderSurface.bottom,
+            )
+        }.onFailure { renderSurface.requestLayout() }
+    }
+
+    fun syncScrollState() {
+        syncPosted = false
+        val currentVerticalY = verticalScroll.scrollY
+        val currentHorizontalX = horizontalScroll.scrollX
+        if (alphaTabLayoutDirty()) {
+            relayoutRenderSurfaceNow()
+            if (!alphaTabLayoutDirty()) {
+                syncScrollState()
+                return
+            }
+            // The alphaTab listener returns immediately in this state. Do not
+            // advance delivered offsets; the next frame will replay the full
+            // delta after onLayout clears the flag.
+            renderSurface.postOnAnimation {
+                if (alphaTabLayoutDirty() ||
+                    verticalScroll.scrollY != deliveredVerticalY ||
+                    horizontalScroll.scrollX != deliveredHorizontalX
+                ) {
+                    postScrollSync()
+                }
+            }
+            return
+        }
+        if (currentVerticalY != deliveredVerticalY) {
+            alphaTabScrollListener.onScrollChange(
+                verticalScroll,
+                verticalScroll.scrollX,
+                currentVerticalY,
+                verticalScroll.scrollX,
+                deliveredVerticalY,
+            )
+            deliveredVerticalY = currentVerticalY
+        }
+        if (currentHorizontalX != deliveredHorizontalX) {
+            alphaTabScrollListener.onScrollChange(
+                horizontalScroll,
+                currentHorizontalX,
+                horizontalScroll.scrollY,
+                deliveredHorizontalX,
+                horizontalScroll.scrollY,
+            )
+            deliveredHorizontalX = currentHorizontalX
+        }
+        if (alphaTabLayoutDirty()) {
+            relayoutRenderSurfaceNow()
+        }
+        if (alphaTabLayoutDirty() ||
+            verticalScroll.scrollY != deliveredVerticalY ||
+            horizontalScroll.scrollX != deliveredHorizontalX
+        ) {
+            renderSurface.postOnAnimation { postScrollSync() }
+        }
+    }
+
+    postScrollSync = {
+        if (!syncPosted) {
+            syncPosted = true
+            // AlphaTab skips scroll events while its placeholder layout is dirty.
+            // Request the layout first, then forward the latest offset after the
+            // next traversal so the skipped bottom-to-top delta is not lost.
+            if (alphaTabLayoutDirty()) {
+                renderSurface.requestLayout()
+            }
+            val observer = renderSurface.viewTreeObserver
+            val afterLayout = object : ViewTreeObserver.OnPreDrawListener {
+                override fun onPreDraw(): Boolean {
+                    if (observer.isAlive) observer.removeOnPreDrawListener(this)
+                    syncScrollState()
+                    return true
+                }
+            }
+            observer.addOnPreDrawListener(afterLayout)
+        }
+    }
+
+    // A partial render is the moment alphaTab clears the dirty layout state.
+    // Re-drive the bridge immediately instead of waiting for another touch or
+    // fling event (which may never arrive after an edge rebound).
+    api.renderer.partialRenderFinished.on {
+        renderSurface.post {
+            if (alphaTabLayoutDirty() ||
+                verticalScroll.scrollY != deliveredVerticalY ||
+                horizontalScroll.scrollX != deliveredHorizontalX
+            ) {
+                postScrollSync()
+            }
+        }
+    }
+
+    verticalScroll.setOnScrollChangeListener { _, _, y, _, oldY ->
+        postScrollSync()
+    }
+    horizontalScroll.setOnScrollChangeListener { _, _, _, _, _ -> postScrollSync() }
+}
+
+private val ScorePitchSaver = Saver<ScorePitch, String>(
+    save = { "${it.step},${it.alter},${it.octave}" },
+    restore = { encoded ->
+        encoded.split(',').takeIf { it.size == 3 }?.let { values ->
+            runCatching { ScorePitch(values[0].single(), values[1].toInt(), values[2].toInt()) }.getOrNull()
+        }
+    },
+)
+
+private val MusicalDurationSaver = Saver<MusicalDuration, String>(
+    save = { "${it.noteType},${it.dots},${it.actualNotes ?: -1},${it.normalNotes ?: -1}" },
+    restore = { encoded ->
+        encoded.split(',').takeIf { it.size == 4 }?.let { values ->
+            runCatching {
+                MusicalDuration(
+                    noteType = values[0],
+                    dots = values[1].toInt(),
+                    actualNotes = values[2].toInt().takeIf { it >= 0 },
+                    normalNotes = values[3].toInt().takeIf { it >= 0 },
+                )
+            }.getOrNull()
+        }
+    },
+)

@@ -122,7 +122,10 @@ object PlaybackPlanCompiler {
     private fun nominalMeasureTicks(measure: ScoreMeasureIr?): Long {
         val beats = measure?.beats ?: 4
         val beatType = measure?.beatType ?: 4
-        return (beats * TICKS_PER_QUARTER * 4L / beatType).coerceAtLeast(1L)
+        require(beats > 0 && beatType > 0) { "MusicXML 拍号必须大于 0" }
+        return Math.multiplyExact(Math.multiplyExact(beats.toLong(), TICKS_PER_QUARTER.toLong()), 4L)
+            .div(beatType.toLong())
+            .coerceAtLeast(1L)
     }
 
     private fun toTicks(value: Long, divisions: Int): Long {

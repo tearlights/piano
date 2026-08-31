@@ -54,7 +54,9 @@ class AudiverisOmrClient : OmrClient {
             while (true) {
                 val read = input.read(buffer)
                 if (read < 0) break
-                require(output.size() + read <= MAX_XML_BYTES) { "OMR 返回的 MusicXML 过大" }
+                if (output.size() + read > MAX_XML_BYTES) {
+                    throw OmrServiceException("OMR 返回的 MusicXML 过大", "result_too_large", retryable = false)
+                }
                 output.write(buffer, 0, read)
             }
             output.toByteArray()
@@ -77,31 +79,37 @@ class AudiverisOmrClient : OmrClient {
         }
     }
 
-    private fun readJson(connection: HttpURLConnection): JSONObject {
+    internal fun readJson(connection: HttpURLConnection): JSONObject {
         ensureSuccess(connection)
-        val text = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readTextLimited(MAX_JSON_CHARS) }
+        val text = try {
+            connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readTextLimited(MAX_JSON_CHARS) }
+        } catch (_: ResponseTooLargeException) {
+            throw OmrServiceException("OMR 服务响应过大", "response_too_large", retryable = false)
+        }
         return JSONObject(text)
     }
 
-    private fun ensureSuccess(connection: HttpURLConnection) {
+    internal fun ensureSuccess(connection: HttpURLConnection) {
         val status = connection.responseCode
         if (status in 200..299) return
-        val body = runCatching {
+        val body = try {
             connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readTextLimited(MAX_JSON_CHARS) }.orEmpty()
-        }.getOrDefault("")
+        } catch (_: ResponseTooLargeException) {
+            throw OmrServiceException("OMR 服务错误响应过大", "response_too_large", retryable = false)
+        }
         val json = runCatching { JSONObject(body) }.getOrNull()
         val code = json?.optString("code")?.takeIf(String::isNotBlank) ?: "http_$status"
         val message = json?.optString("message")?.takeIf(String::isNotBlank) ?: "OMR 服务返回错误（$status）"
         throw OmrServiceException(message, code, status == 408 || status == 429 || status >= 500)
     }
 
-    private fun parseJob(json: JSONObject): RemoteOmrJob = RemoteOmrJob(
+    internal fun parseJob(json: JSONObject): RemoteOmrJob = RemoteOmrJob(
         id = json.getString("jobId"),
         status = json.getString("status"),
         stage = json.optString("stage", json.getString("status")),
         errorCode = json.nullableString("errorCode"),
         errorMessage = json.nullableString("errorMessage"),
-        diagnosticsJson = json.optJSONObject("diagnostics")?.toString(),
+        diagnosticsJson = boundOmrDiagnostics(json.optJSONObject("diagnostics")?.toString()),
     )
 
     private fun safeId(id: String): String {
@@ -118,13 +126,17 @@ class AudiverisOmrClient : OmrClient {
     }
 }
 
+internal fun boundOmrDiagnostics(value: String?): String? = value?.take(4 * 1024)
+
+private class ResponseTooLargeException : Exception()
+
 private fun java.io.Reader.readTextLimited(limit: Int): String {
     val output = StringBuilder()
     val buffer = CharArray(2048)
     while (true) {
         val read = read(buffer)
         if (read < 0) break
-        require(output.length + read <= limit) { "OMR 服务响应过大" }
+        if (output.length + read > limit) throw ResponseTooLargeException()
         output.append(buffer, 0, read)
     }
     return output.toString()

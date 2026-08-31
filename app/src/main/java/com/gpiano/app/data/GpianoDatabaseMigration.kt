@@ -33,6 +33,9 @@ object GpianoDatabaseMigration {
 
     val V6_TO_V7 = object : Migration(6, 7) {
         override fun migrate(database: SupportSQLiteDatabase) {
+            // Every legacy upgrade path from v1-v6 passes through this migration.
+            // Schemas v7+ already contain this nullable column.
+            database.execSQL("ALTER TABLE scores ADD COLUMN lastOpenedAt INTEGER")
             database.execSQL(
                 """
                 CREATE TABLE IF NOT EXISTS score_structures (

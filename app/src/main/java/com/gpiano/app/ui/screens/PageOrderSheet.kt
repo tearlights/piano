@@ -21,8 +21,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 @Composable
 fun PageOrderSheet(score: Score, onClose: () -> Unit) {
     val context = LocalContext.current.applicationContext
-    val repository = remember { ScoreRepository(context) }
-    val pages by repository.observePages(score.id).collectAsState(emptyList())
+    val repository = remember(score.id) { ScoreRepository(context) }
+    val pagesFlow = remember(score.id, repository) { repository.observePages(score.id) }
+    val pages by pagesFlow.collectAsState(emptyList())
     val scope = rememberCoroutineScope()
     Column(Modifier.padding(24.dp)) {
         Text("调整页面顺序")

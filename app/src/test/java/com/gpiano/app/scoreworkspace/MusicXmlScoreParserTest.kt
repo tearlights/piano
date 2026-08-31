@@ -8,6 +8,10 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.nio.file.Files
+import javax.xml.parsers.DocumentBuilder
+import javax.xml.parsers.DocumentBuilderFactory
+import javax.xml.parsers.ParserConfigurationException
 
 class MusicXmlScoreParserTest {
     private lateinit var xml: String
@@ -45,6 +49,102 @@ class MusicXmlScoreParserTest {
         assertTrue(score.events.any(ScoreEventIr::isChordTone))
         assertEquals(score.events.size, score.events.map(ScoreEventIr::id).toSet().size)
         assertTrue(ScoreIrValidator.validate(score).isEmpty())
+    }
+
+    @Test
+    fun twoPartScoresUsePartIdentityBeforePartLocalStaffNumber() {
+        val source = """
+            <score-partwise version="4.0">
+              <part-list>
+                <score-part id="RH"><part-name>Right</part-name></score-part>
+                <score-part id="LH"><part-name>Left</part-name></score-part>
+              </part-list>
+              <part id="RH"><measure number="1">
+                <attributes><divisions>1</divisions><time><beats>1</beats><beat-type>4</beat-type></time></attributes>
+                <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><staff>1</staff></note>
+              </measure></part>
+              <part id="LH"><measure number="1">
+                <attributes><divisions>1</divisions><time><beats>1</beats><beat-type>4</beat-type></time></attributes>
+                <note><pitch><step>C</step><octave>3</octave></pitch><duration>1</duration><staff>1</staff></note>
+              </measure></part>
+            </score-partwise>
+        """.trimIndent()
+
+        val score = MusicXmlScoreParser.parse(source)
+
+        assertEquals(ScoreHand.Right, score.parts[0].measures.single().events.single().hand)
+        assertEquals(ScoreHand.Left, score.parts[1].measures.single().events.single().hand)
+    }
+
+    @Test
+    fun singlePartWithoutStaffDefaultsToRightHandPlayback() {
+        val source = """
+            <score-partwise>
+              <part-list><score-part id="P1"><part-name>Melody</part-name></score-part></part-list>
+              <part id="P1"><measure number="1">
+                <attributes><divisions>1</divisions><time><beats>1</beats><beat-type>4</beat-type></time></attributes>
+                <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note>
+              </measure></part>
+            </score-partwise>
+        """.trimIndent()
+        val score = MusicXmlScoreParser.parse(source)
+
+        assertEquals(ScoreHand.Right, score.events.single().hand)
+        assertEquals(1, PlaybackPlanCompiler.compile(score, PlaybackSelection(1, 1, hand = PlaybackHand.Right)).events.size)
+        assertTrue(PlaybackPlanCompiler.compile(score, PlaybackSelection(1, 1, hand = PlaybackHand.Left)).events.isEmpty())
+    }
+
+    @Test
+    fun rejectsInternalEntityDeclarationsBeforeParsing() {
+        val source = """
+            <!DOCTYPE score-partwise [<!ENTITY secret SYSTEM "file:///private.txt">]>
+            <score-partwise><part-list/></score-partwise>
+        """.trimIndent()
+
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            MusicXmlScoreParser.parse(source)
+        }
+
+        assertTrue(error.message.orEmpty().contains("实体声明"))
+    }
+
+    @Test
+    fun externalDoctypeIsNeverFetched() {
+        val malformedDtd = Files.createTempFile("gpiano-xml-", ".dtd")
+        Files.write(malformedDtd, "this is not a valid DTD".toByteArray())
+        try {
+            val source = """
+                <!DOCTYPE score-partwise SYSTEM "${malformedDtd.toUri()}">
+                <score-partwise>
+                  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+                  <part id="P1"><measure number="1">
+                    <attributes><divisions>1</divisions><time><beats>1</beats><beat-type>4</beat-type></time></attributes>
+                    <note><rest/><duration>1</duration></note>
+                  </measure></part>
+                </score-partwise>
+            """.trimIndent()
+
+            assertEquals(1, MusicXmlScoreParser.parse(source).events.size)
+        } finally {
+            Files.deleteIfExists(malformedDtd)
+        }
+    }
+
+    @Test
+    fun unsupportedOptionalSecurityFeatureDoesNotAbortParserSetup() {
+        val factory = object : DocumentBuilderFactory() {
+            override fun newDocumentBuilder(): DocumentBuilder = error("not needed")
+            override fun setAttribute(name: String, value: Any) = Unit
+            override fun getAttribute(name: String): Any = error("not needed")
+            override fun setFeature(name: String, value: Boolean) {
+                throw ParserConfigurationException(name)
+            }
+            override fun getFeature(name: String): Boolean = error("not needed")
+        }
+
+        with(MusicXmlScoreParser) {
+            factory.setFeatureSafely("unsupported-on-platform", true)
+        }
     }
 
     @Test
@@ -238,6 +338,73 @@ class MusicXmlScoreParserTest {
         assertEquals(duration.toDivisions(divisions), changed.changedEvent.durationDivisions)
         assertEquals("quarter", changed.changedEvent.noteType)
         assertNull(changed.changedEvent.tupletActualNotes)
+    }
+
+    @Test
+    fun malformedPitchesUseOneParseErrorBoundary() {
+        listOf(
+            "<step>C</step><alter>not-a-number</alter><octave>4</octave>",
+            "<step>C</step><alter>3</alter><octave>4</octave>",
+            "<step>C</step><octave>10</octave>",
+            "<step>CC</step><octave>4</octave>",
+        ).forEach { pitch ->
+            val source = """
+                <score-partwise>
+                  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+                  <part id="P1"><measure number="1">
+                    <attributes><divisions>1</divisions><time><beats>1</beats><beat-type>4</beat-type></time></attributes>
+                    <note><pitch>$pitch</pitch><duration>1</duration></note>
+                  </measure></part>
+                </score-partwise>
+            """.trimIndent()
+
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                MusicXmlScoreParser.parse(source)
+            }
+            assertTrue(error.message.orEmpty().startsWith("无法解析 MusicXML 音高："))
+        }
+    }
+
+    @Test
+    fun transposeRejectsOutOfRangePitchInsteadOfClamping() {
+        assertThrows(IllegalArgumentException::class.java) {
+            ScorePitch('G', 0, 9).transpose(1, preferSharps = true)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ScorePitch('C', 0, 0).transpose(-1, preferSharps = false)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ScorePitch('C', 0, 4).transpose(Int.MAX_VALUE, preferSharps = true)
+        }
+    }
+
+    @Test
+    fun durationChangeShiftsFollowingVoiceEventAndKeepsOtherVoiceOnset() {
+        val source = """
+            <score-partwise version="4.0">
+              <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+              <part id="P1"><measure number="1">
+                <attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+                <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type></note>
+                <note><pitch><step>D</step><octave>4</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type></note>
+                <backup><duration>2</duration></backup>
+                <note><pitch><step>E</step><octave>3</octave></pitch><duration>1</duration><voice>2</voice><type>quarter</type></note>
+              </measure></part>
+            </score-partwise>
+        """.trimIndent()
+        val original = MusicXmlScoreParser.parse(source)
+        val firstVoice = original.events.filter { it.voice == "1" }
+        val otherVoice = original.events.single { it.voice == "2" }
+
+        val changed = MusicXmlRevisionCompiler.apply(
+            source,
+            CorrectionOperation.ChangeDuration(firstVoice.first().id, MusicalDuration("half")),
+        )
+
+        assertEquals(2L, changed.score.findEvent(firstVoice[1].id)?.onsetDivisions)
+        assertEquals(otherVoice.onsetDivisions, changed.score.findEvent(otherVoice.id)?.onsetDivisions)
+        assertTrue(changed.xml.replace(Regex("\\s+"), "").contains("<backup><duration>3</duration></backup>"))
+        assertTrue(ScoreIrValidator.validate(changed.score).isEmpty())
     }
 
     @Test

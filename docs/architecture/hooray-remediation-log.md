@@ -1,0 +1,283 @@
+# Hooray 稳定性与体验修复台账
+
+## 验收回归：Android 无法打开结构化练习谱（2026-08-25）
+
+- 现场证据：设备数据库完整性为 `ok`，当前结构、修订指针和 `structures/.../*.musicxml` 文件均一致；文件为 134702 字节的有效 MusicXML。暴露底层异常后确认 Android XML 工厂拒绝 `http://javax.xml.XMLConstants/feature/secure-processing`，不是用户数据或修订文件丢失。
+- 根因：安全解析加固把跨平台可选的 JAXP secure-processing feature 作为必选配置；桌面 JVM 支持而目标 Android 实现不支持，导致 DOM 构造前即失败。仓库随后吞掉每个候选异常，最终显示误导性的“没有可读取修订版”。
+- 修复：与其他解析器 feature 一样容错设置 secure-processing；仍通过输入预检、外部实体/参数实体禁用、外部 DTD 禁用、外部协议属性和空实体解析器形成纵深防护。结构化谱所有候选均失败时保留最后一个底层异常作为 cause 并显示原因。
+- 测试：`MusicXmlScoreParserTest` 增加“不支持可选安全 feature 不得中止配置”用例；既有内部实体拒绝、外部 DTD 不读取和真实 24 小节 MusicXML 用例继续通过。
+- 真机：在 2405CRPFDC 上保留原数据库及原修订文件覆盖安装，曲谱库点击“打开练习谱”后成功进入 `Music21 Fragment` 工作区，显示 `24 小节 · 4/4 · 修订 0`、完整五线谱、范围和试听控件。
+
+开始日期：2026-08-24  
+基线：`f2da0b516b12175e762e31f0eb1c3ce0616f4a15`  
+工作分支：`Hooray`
+
+本文记录真机问题和 `GPIANO-ISSUE.md` 代码审查项的原因、具体修复、验证证据与提交。状态只按实际完成情况更新。
+
+## 播放与工作区体验
+
+| 问题 | 原因 | 修复 | 验证 | 状态 |
+| --- | --- | --- | --- | --- |
+| 前段可试听、后段提示时间轴不一致 | 不规则 MusicXML 小节使 ScoreIR `PlaybackPlan` 与 alphaTab 累计 tick 分叉；控制器错误地要求两者起点完全相等 | 试听范围、跳转和循环只取 alphaTab `masterBars`；导入后将实际跨度超过标称拍号的小节标记为不规则小节；MIDI 目标仍使用 `PlaybackPlan`，仅以小节索引关联 | 时间轴与真实 MusicXML/MIDI 回归通过；Android 全量测试和构建通过 | 已修复 |
+| 全篇播放约 20～30 秒后 App 崩溃 | alphaTab Android 内部滚动在长谱面中计算出负动画时长，`Animation.setDuration` 抛异常 | 使用自定义空滚动处理器阻断缺陷动画；Gpiano 仅在小节真正变化时无动画定位，保留游标和高亮 | 真机全篇播放完成且进程未崩溃；Android 全量测试和构建通过 | 已修复 |
+| 所有音听起来断续、疑似极短双触发 | alphaTab 1.8.4 Android 音频 worker 将每次不足固定 buffer 的尾部补零后整块写入 AudioTrack；问题出现在为修崩溃升级之后，生成 MIDI 本身无快速同键重触发 | 回到声音正常的 alphaTab 1.8.3，并以应用侧滚动处理修复崩溃，不再以音频实现变化换取稳定性 | 问题谱 MIDI 事件测试确认同通道同键 120 tick 内无重触发；真机最终听感待用户一次性验收 | 已修复，待验收 |
+| 下滑后上滑谱面消失 | alphaTab 懒加载回收离屏 bitmap 后，回滑路径偶发未完成可见分片重排/重绘 | 保留懒加载并转发原始滚动监听；回滑后对 render surface 补发延迟布局与重绘 | 真机滚到底部再回顶部 1 轮 + 快速往返 3 轮，谱面完整且无应用异常 | 已修复 |
+| 练习工作区直接打开最近谱且无选谱阶段 | 底部入口直接读取同步持久化的单个 `structureId`，工作区没有选谱、切换和恢复偏好 | 增加最近优先选谱、工作区换谱、空状态、曲谱库入口和默认关闭的显式自动恢复设置；导航/选择状态可跨配置变更保存 | 真机核对选谱、自动恢复开关、换谱与范围面板；Android 全量测试和构建通过 | 已修复 |
+
+### 工作区 MIDI 会话生命周期
+
+- 修复：新增 `WorkspaceMidiSession`，由练习工作区导航层持有 MIDI 控制器、当前跟弹目标、录制现场和结果保存；`MidiPracticeSheet` 只负责设置与结果展示，收起后不再关闭设备或录制。
+- 交互：开始跟弹后自动回到完整谱面，并显示紧凑控制栏；离开整个练习工作区时必须选择“完成并离开”“放弃本次并离开”或“留在当前页面”。空闲离开时关闭会话并释放 MIDI 设备。
+- 测试：`WorkspaceMidiSessionStateTest` 覆盖录制中、设备中断后仍需显式处理，以及仅连接设备不阻塞退出；`:app:compileDebugKotlin` 与针对性测试通过。
+
+### 跟弹实时谱面反馈
+
+- 修复：开始录制前增加一小节倒计时，随后从选段起点启动固定速度时间轴；`IncrementalPerformanceMatcher` 持续复用完整 `PerformanceMatcher` 重算当前前缀。
+- 交互：谱面随当前小节滚动，顶部覆盖层以黄色显示当前目标、绿色显示正确、红色显示节奏错误、错音、多音和已超时漏音；紧凑控制栏同步显示当前小节和时间进度。
+- 测试：新增 `IncrementalPerformanceMatcherTest`，并扩展 `PerformanceMatchingTest` 锁定固定起点下的迟到判定；针对性 JVM 测试通过。
+
+### 双头小节选段
+
+- 修复：顶部横向小节 Chip 列表替换为 Material 3 `RangeSlider`，同时显示精确起止数字、两端 `− / +` 精调、“当前小节”和“全篇”。试听设置面板同步使用双头滑块。
+- 状态：明确拆分 `selectionStartMeasure`、`selectionEndMeasure` 与 `focusedMeasure`；所有下游练习能力继续共享同一选段，谱面只在拖动结束后跟随焦点。
+- 测试：新增 `WorkspaceMeasureSelectionTest`，覆盖 240 小节长谱边界、端点不交叉和精确内部范围；针对性测试与 Debug 构建通过。
+
+### 谱面点击更新真实选段
+
+- 修复：alphaTab 触摸坐标结合水平/垂直滚动量和屏幕密度转换到渲染内容坐标，再用 `MasterBarBounds` 命中真实小节索引并回传 Gpiano 状态。
+- 规则：普通点击第 `m` 小节后设置 `selectionStartMeasure=m`、`focusedMeasure=m`；原终点保留，只有 `m` 超过终点时才同步收敛到 `m`。校正面板打开时关闭范围点击处理。
+- 测试：`WorkspaceMeasureSelectionTest` 覆盖终点保持/收敛，`AlphaTabHitCoordinatesTest` 覆盖视口、滚动与密度换算；针对性测试和 Debug 构建通过。
+
+## `GPIANO-ISSUE.md` 修复范围
+
+后续按独立可验证提交处理：
+
+1. P0：AI provider SSRF/重定向密钥泄漏、Room 旧版本迁移、SQLite 外键、左右手判定。
+2. 并发与性能：编辑防重入、派生版本幂等、书签/页序原子更新、工作区重组和阅读器 Flow 稳定。
+3. 数据完整性：备份自导自拒、覆盖恢复语义、文件/数据库补偿、时值编辑与 ScoreIR 校验。
+4. 服务和客户端健壮性：socket/线程限制、OMR 任务 TTL、MIDI 状态同步、路径安全、诊断脱敏、导入状态。
+5. 低危与测试缺口：安全 XML、算术边界、MIDI 延音/SysEx、错误分类、MXL 限界、状态保存和死代码。
+
+每项完成后在本文件追加修改文件、测试命令/结果和提交 SHA。
+
+### 编辑与练习版本操作防重入
+
+- 修复：校正、撤销/重做、主谱/派生修订切换，以及练习版本创建、读取、采纳、拒绝和导出，均在启动协程或系统文件选择器前同步获取原子门闩；第二次操作立即忽略。所有完成、失败与取消路径都在 `finally` 或取消回调中释放门闩。
+- 测试：新增 `OperationGateTest`，8 个线程同时竞争只允许一个进入，并验证释放后可再次进入；Android 全量 JVM 测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### 书签/页序读改写竞态与 Reader 重订阅
+
+- 修复：书签 toggle 下沉到 `BookmarkDao` 的 Room 事务；页序移动在 `ScorePageDao` 同一事务内重新读取当前顺序并交换，拒绝非 ±1 方向。Reader 与页序面板按 score id `remember` 同一个页面 Flow，页面减少时把当前位置收敛到有效范围。
+- 测试：新增 `DaoAtomicOperationsTest`，覆盖书签插入/删除切换、基于当前顺序的相邻页交换和非法方向；Android 全量 JVM 测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### 工作区每拍重算与状态稳定性
+
+- 修复：播放状态标记为 Compose `@Immutable`；工作区直接复用 `MusicXmlDocument.summary`，不再每次重组遍历整谱生成摘要；当前小节事件数量与校正事件列表按谱面和小节缓存。此前的播放回调已只在小节实际变化时发布状态，谱面定位也只在目标小节变化时执行。
+- 测试：Android 全量 JVM 测试与 Debug 构建通过；真机播放/滚动回归已覆盖全篇与快速往返。
+- 提交：见包含本节的独立提交。
+
+### 备份导出/导入 JSON 限额不对称
+
+- 修复：`library.json` 和 `manifest.json` 在导出、导入两侧统一使用 64 MiB UTF-8 字节上限；导出先序列化并校验，再打开目标文件写入，避免生成 App 自己无法恢复的包或留下半写入目标。
+- 测试：新增 `GpianoBackupLimitsTest`，覆盖边界值接受和超 1 字节拒绝；Android 全量 JVM 测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### 识别诊断信息明文进入备份
+
+- 修复：识别任务导出副本清除 `remoteJobId`、`errorMessage` 与 `diagnosticsJson`，保留稳定 `errorCode` 和状态以支持本地恢复提示。
+- 测试：`GpianoBackupLimitsTest` 使用含内部 URL/token 和响应片段的任务验证三项敏感字段清空、分类与状态保留；Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### “覆盖恢复”实际合并旧数据
+
+- 修复：新增专用 `BackupRestoreDao.replaceWith` Room 事务，按外键顺序清空 11 张业务表并按依赖顺序写入快照；空快照也执行清空。恢复前记录旧文件引用，数据库提交后清理不再引用的旧文件；异常沿用已有文件回滚。
+- 测试：新增 `BackupRestoreDaoTest`，覆盖空快照仍完整清表、子到父清理顺序和父到子插入顺序；Android 全量 JVM 测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### 恢复进程死亡导致文件/数据库跨介质不一致
+
+- 修复：恢复快照的六类文件路径统一重映射到 UUID `restore-generations`；目标路径保证全新，全部文件落盘并 fsync 后才用单个 Room 事务替换 DB。切换前崩溃不覆盖旧文件，切换后崩溃时新文件已存在。下一次恢复会按当前 DB 引用清理孤儿 generation。
+- 测试：`ScoreRepositoryPathTest` 新增 generation 映射、非法 generation 与 `..` 路径拒绝；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### ScoreIR 弱校验与标称小节 tick 溢出
+
+- 修复：ScoreIR 校验新增声部/小节索引一致性、正 divisions/拍号、严格正时值、结束位置 Long 溢出和同 voice/staff 事件重叠检查；播放计划的标称小节长度从运算第一步即使用 Long，并拒绝非正拍号。
+- 测试：新增 `ScoreIrValidatorTest`，覆盖零时值、同声部重叠、结束位置溢出和 `Int.MAX_VALUE` 拍数的 Long 计算；包括真实 24 小节谱在内的 Android 全量 JVM 测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### `changeDuration` 破坏多声部 `backup/forward`
+
+- 修复：和弦组时值变化后，同 voice 的后续事件按新时值自然移动；编译器同步调整目标组之后第一个 `backup`/`forward` 的 duration 抵消游标差值，使其他 voice/staff 的既有 onset 不漂移。补偿值不能为负，变为 0 时移除控制节点；重解析后继续由 ScoreIR 重叠校验把关。
+- 测试：新增双 voice MusicXML 用例，将第一音从四分音符改为二分音符，验证同 voice 后一音后移、另一 voice onset 不变、`backup` 从 2 调整为 3 且结果通过 ScoreIR 校验；Android 全量 JVM 测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### 导入孤儿文件与删除路径未校验
+
+- 修复：单文件和图片组导入把曲谱/页面写入同一 Room 事务，复制、PDF 分页或 DB 失败时删除本次 UUID 文件；扩展名只由受信 MIME 映射。删除前验证曲谱、页面和分组目录的 canonical 路径均位于 `filesDir`，再删 DB 与文件；备份安装也复用同一解析器。
+- 测试：新增 `ScoreRepositoryPathTest`，覆盖合法嵌套路径、`..` 越界和绝对路径拒绝；Android 全量 JVM 测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### AI provider SSRF 与密钥重定向
+
+- 修复：模型端点启动校验会解析全部地址并拒绝非公网 IP；仅显式开发模式允许 HTTP loopback。provider 请求使用禁止重定向的 opener，授权头不会跟随 30x 发往其他目标。
+- 测试：`python -m unittest discover -s practice-ai-service -p 'test_*.py'`，7 项通过，覆盖私网地址、开发 loopback 和禁重定向。
+- 提交：本项提交完成后回填 SHA。
+
+### AI/OMR HTTP 慢连接与无界线程
+
+- 修复：两个伴随服务在接受 socket 后设置可配置的读写超时，并在创建请求线程前以有界信号量占用容量；容量耗尽时关闭新连接。请求线程无论正常完成或抛出异常都会释放容量。网络请求并发与 OMR 的 Audiveris 进程池分别配置。
+- 测试：`python -m unittest discover -s practice-ai-service -p 'test_*.py'` 9 项通过；`python -m unittest discover -s omr-service -p 'test_*.py'` 7 项通过。新增用例核对 accepted socket 超时及超出 worker 上限时不再派生线程。
+- 提交：见包含本节的独立提交。
+
+### OMR 任务目录无上限且没有 TTL
+
+- 修复：`JobStore` 在同一锁内先清理再检查任务目录总数，容量检查与目录创建不可竞态穿透。启动和每次提交前清理超过 TTL 的 `ready`、`failed` 任务，以及没有有效元数据的残缺目录；`queued`、`running` 始终保留。写入失败会删除刚创建的目录，容量耗尽返回稳定错误码。
+- 测试：`python -m unittest discover -s omr-service -p 'test_*.py'` 10 项通过，覆盖活动任务容量、终态 TTL、运行任务保留和残缺目录清理。
+- 提交：见包含本节的独立提交。
+
+### MIDI 接收线程读取非同步状态
+
+- 修复：`MidiPracticeController.state` 声明为 JVM volatile；主线程发布录制状态后，MIDI 接收线程读取 `connection` 时具有明确的 happens-before 可见性。
+- 测试：新增 `MidiPracticeControllerVisibilityTest`，通过字段修饰符回归检查锁定跨线程可见性契约；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### 曲谱导入无进度且允许重复触发
+
+- 修复：PDF 与多图导入在启动协程前通过 `MutableStateFlow.compareAndSet` 原子占用同一个门闩；第二次请求立即忽略，所有终止路径在 `finally` 中释放。曲谱库同步禁用入口并显示复制、校验进度提示。
+- 测试：新增 `LibraryImportGateTest`，8 线程同时竞争只允许一次进入，并验证释放后可再次导入；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### 服务响应超限错误分类与诊断边界
+
+- 修复：AI/OMR 有界读取器改用专用超限异常，并在客户端边界转换成 `response_too_large`；MusicXML 超限转换成 `result_too_large`。OMR 错误响应超限不会再被吞掉并退化成 `http_状态码`。任务诊断 JSON 在构造持久化模型前限制为 4 KiB。
+- 测试：新增 `PracticeAiClientResponseTest` 与 `OmrClientResponseTest`，覆盖成功/错误响应超限的稳定分类及诊断截断；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### MusicXML 安全 feature 被静默忽略
+
+- 修复：解析器强制启用 JAXP secure processing，并尝试关闭所有外部 DTD/schema 协议；已有空实体解析器继续作为平台兼容兜底。为兼容常见 MusicXML 外部 DOCTYPE，不一刀切拒绝 DOCTYPE，但在进入 DOM 前明确拒绝任何 `ENTITY` 声明和内联 DTD 子集。
+- 测试：`MusicXmlScoreParserTest` 新增内部外部实体载荷拒绝，以及指向本地恶意 DTD 仍不读取且可安全解析的用例；真实带 MusicXML 4.0 DOCTYPE 的 24 小节谱继续通过。Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### `ScorePitch.transpose` 越界静默夹值
+
+- 修复：移调先以 Long 计算目标 MIDI，再要求结果位于 MusicXML 音高模型可表示的 12..127；不再用 `coerceIn` 把不同的越界编辑全部变成边界音。
+- 测试：新增最高音上移、最低可表示音下移和 `Int.MAX_VALUE` 半音三类拒绝用例；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### `toPitch` 越界抛裸异常
+
+- 修复：音高元素逐项严格解析；存在但非整数的 `alter` 不再回退为 0，缺失/非法 step、octave 与 `ScorePitch` 范围错误统一包裹为“无法解析 MusicXML 音高”。
+- 测试：新增非法 alter 文本、alter=3、octave=10 与多字符 step 四类用例，全部核对统一错误边界；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### MIDI 延音合并依赖精确 tick
+
+- 修复：同音高、同手别且带对应 tie 标记的相邻事件，在连接点相差不超过 1 tick 时合并；容差只吸收 divisions 到 MIDI tick 的舍入误差，不覆盖 2 tick 以上的真实间隔。
+- 测试：`StandardMidiFileTest` 新增 1 tick 仍为一次 note-on、2 tick 保持两次 note-on 的成对边界用例；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### MIDI 变量长度编码边界缺测
+
+- 修复：delta-time 变量长度写入器提取为可直接验证的内部函数，导出路径仍复用同一实现并保留格式上限检查。
+- 测试：`StandardMidiFileTest` 精确核对 0、0x7F、0x80、0x3FFF、0x4000、0x0FFFFFFF 的字节序列，并验证 0x10000000 被拒绝；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### MIDI 解析器不跟踪 SysEx 状态
+
+- 修复：解析器增加跨 `feed` 调用保存的 SysEx 状态；`F0` 后的全部非 real-time 字节隔离到 `F7`，因此畸形载荷中的 `0x90` 不能注入按键。截断 SysEx 只可由结束字节或 `reset` 恢复，real-time 字节不改变 SysEx、running status 或部分消息状态。
+- 测试：`MidiMessageParserTest` 新增跨分片 SysEx 伪 note-on、截断后 reset，以及插入 timing clock 的 running-status 分片三类用例；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### `extract_mxl` 无界读取 container.xml
+
+- 修复：读取 `META-INF/container.xml` 前先检查 ZipInfo 解压大小，超过 64 KiB 立即拒绝；rootfile 继续要求安全相对路径并限制 MusicXML 为 20 MiB。
+- 测试：OMR 服务新增高压缩比、解压后 64 KiB+1 的 container 用例，确认在 XML 解析前返回大小错误；`python -m unittest discover -s omr-service -p 'test_*.py'` 11 项通过。
+- 提交：见包含本节的独立提交。
+
+### 未引用的假数据占位屏残留
+
+- 修复：删除 `BackupSettingsScreen.kt`、`LibraryScreen.kt`、`SecondaryScreens.kt`；当前导航只保留 `ImportedLibraryScreen`、`RealFavoritesScreen`、`RealFoldersScreen` 与 `RestoreSettingsScreen` 的真实数据路径。
+- 测试：`rg` 确认被删 composable 无调用方；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+### 配置变更丢失阅读与校正现场
+
+- 修复：导航只保存 `openedScoreId` 并从 ViewModel 的 score flow 重新解析对象；阅读器页码和面板、工作区小节与试听参数均使用 `rememberSaveable`。`ScorePitch`/`MusicalDuration` 草稿使用严格重建的自定义 Saver，避免保存 Repository 会话或 Android 对象。
+- 测试：Android JVM 全量测试与 Debug 构建通过；Saver 恢复路径会重新触发 `ScorePitch`/`MusicalDuration` 构造校验，无效 Bundle 值返回 null 并使用初始值。
+- 提交：见包含本节的独立提交。
+
+### Room v1-v6 升级缺少 `lastOpenedAt`
+
+- 修复：在所有 v1-v6 升级路径必经的 `V6_TO_V7` 中增加 nullable `lastOpenedAt` 列；v7 及以后 schema 已包含该列，不重复修改。
+- 测试：新增 `GpianoDatabaseMigrationTest` 直接执行迁移并核对 DDL；Android JVM 全量测试与 Debug 构建通过。
+- 提交：本项提交完成后回填 SHA。
+
+### SQLite 外键声明未执行
+
+- 修复：Room 数据库每次打开时显式执行 `PRAGMA foreign_keys=ON`，使结构、识别任务、修订、练习版本和演奏事件的级联/置空约束生效。
+- 测试：`GpianoDatabaseMigrationTest` 直接执行数据库 callback 并核对外键启用语句；Android JVM 全量测试与 Debug 构建通过。
+- 提交：本项提交完成后回填 SHA。
+
+### 双 part 乐谱左手被误判为右手
+
+- 修复：双 part 乐谱优先按 part 索引判定左右手，`staff` 只用于单 part 的 grand staff；避免左手 part 内部同样从 staff 1 编号时被误判。
+- 测试：新增带两个 part、且两边均声明 `staff=1` 的 MusicXML 回归用例；`MusicXmlScoreParserTest` 与 Android JVM 全量测试通过。
+- 提交：本项提交完成后回填 SHA。
+
+### 单 part 无 staff 乐谱分手播放静音
+
+- 修复：单 part 事件在没有 staff 1/2 信息时默认归为右手；staff 信息仍优先，因此单 part grand staff 不受影响，多 part 的未知映射也不会被擅自猜测。
+- 测试：`MusicXmlScoreParserTest` 新增无 staff 单旋律谱，核对事件为 Right、右手计划含音符且左手计划为空；Android JVM 全量测试与 Debug 构建通过。
+- 提交：见包含本节的独立提交。
+
+## 最终语义审计结论
+
+### 顶部选段控件侵占谱面空间
+
+- 修复：起点、终点、双头 `RangeSlider`、当前/全篇快捷操作与查看状态压缩到同一行，固定高度 40dp；端点 `− / +` 使用 28dp 紧凑按钮。
+- 修复：起点与终点在同一点时仍可分别向外调整，避免精调按钮全部失效造成范围状态混乱。
+- 验证：2405CRPFDC 真机显示 24 小节完整谱面，控件单行位于谱面上方；Android JVM 72 项测试与 Debug 构建通过。
+
+### 谱面点击误触与不显示
+
+- 修复：点击监听改为 Activity 级观察桥，不消费 alphaTab 滚动事件；命中计算增加 alphaTab 视口边界，底部导航和控制栏点击不会再被当作小节点击。
+- 验证：真机谱面实际渲染，点击及滚动后仍保持可见；坐标换算和视口边界均有单元测试。
+
+### 下滑后上滑再次出现谱面白屏
+
+- 复现：在练习工作区多轮快速下滑再上滑，alphaTab 可能只保留高亮底色，离屏 bitmap 未及时恢复。
+- 历史方案（已被 2026-08-26 修正替代）：曾尝试在上下滚动停止后延迟 140ms 与 520ms 补发 render surface 布局和重绘；实际根因是 alphaTab 在 layout dirty 时丢弃滚动 delta，现改为布局后的 `OnPreDraw` 偏移转发。
+- 验证：真机完成单轮及三轮快速上下滑，谱面完整恢复且无崩溃；Android JVM 72 项测试与 Debug 构建通过。
+
+- 小节容量：不把“所有声部必须恰好填满标称拍号”作为通用 ScoreIR 不变量。MusicXML 合法包含弱起、隐式小节、自由长度与本项目演示谱中的 overfull bar；强制等值会拒绝已支持的真实谱。当前不变量是正 divisions/拍号/时值、非负 onset、Long 无溢出、同 voice/staff 不重叠。编辑后的 `backup/forward` 会保持其他声部 onset，alphaTab 临时模型对 overfull bar 重建可听时间轴。
+- OMR 取消：`RecognitionWorker` 已在通用 Throwable 分类之前单独捕获并重新抛出 `CancellationException`，保留 WorkManager 取消语义，无需制造代码改动。
+- 已过时条目：`WorkspaceSelectionStore` 当前使用异步 `apply()`，不是原报告所述同步 `commit()`；AlphaTab 播放范围已由 `AlphaTabPlaybackTimeline.resolve` 覆盖缺失、重复、非有限和反向小节边界。
+### alphaTab 声部播放与底部回滑恢复（2026-08-26）
+
+- 播放修复：MusicXML 未提供 `midi-channel` 时，多个 part 可能共享 alphaTab 默认声道；`changeTrackMute` 实际按声道静音，会把另一只手一起静音。送入播放器前为重复声道分配独立 channel，再按左右手筛选 track。切换手别、速度、循环或范围时清理旧 playback plan，避免暂停/继续沿用上一种手别。
+- 谱面修复：alphaTab 在 placeholder layout dirty 时会忽略滚动事件。底部回滑改为先请求一次布局，再在 `OnPreDraw` 中转发最新滚动偏移，补回被忽略的 delta；移除 140/520ms 两阶段定时重绘。
+- 验证：Android JVM 测试与 Debug 编译通过；真机仍需分别试听左右手并复测到达底部后的上滑路径。
+### 触底后回滑仍白屏：重建 alphaTab lazy partial 缓存（2026-08-26）
+
+- 现象：未触底时任意上下滑动正常；一旦到达垂直滚动底部，向上回滑只剩底部当前页，之前页不再绘制。
+- 根因：alphaTab 的 `AlphaTabRenderSurface` 在 layout dirty 时会丢弃滚动 delta，同时已回收的 lazy partial bitmap 不会重新进入完整可见分片状态。
+- 修复：检测“触底→向上”的边沿，调用 alphaTab 公共 `api.render(null)` 重建 lazy partial 缓存；完成回调不再把滚动位置跳回焦点小节。普通滚动仍使用布局后的偏移转发，不再叠加定时重绘。
+# 2026-08-26 alphaTab 触底回滑白屏：边沿回调根因
+
+- `api.render(null)` 不能恢复问题：它在底部 viewport 重新建立 partial 后，仍只渲染当前可见区域。
+- alphaTab 1.8.3 的 `AlphaTabRenderSurface.onScrollChange` 向上分支错误使用底部 placeholder 判断边界，触底后首个向上 delta 可能被吞掉，导致已回收的上方 bitmap 不触发布局。
+- 应用层现在只在“触底后首次向上”注入一次整视口负向 delta，并强制 renderSurface 重新布局；移除全量 render 和位置跳转副作用。
+- 验证：`:app:testDebugUnitTest`、`:app:assembleDebug` 均通过，待真机重点复测触底后连续上滑。
+# 2026-08-29 alphaTab 惯性滚动丢失 delta（再次补强）
+
+- 新复现确认问题同时存在于“惯性触底后上滑”和“惯性触顶后下滑”，根因是 alphaTab `AlphaTabRenderSurface` 在 `_layoutDirty` 期间直接丢弃滚动回调。
+- 滚动桥接现在读取 alphaTab 的布局脏状态；脏状态期间不推进已交付偏移，等下一次布局完成后补发累计位移，覆盖拖动和 fling 的两个方向。
+- 移除单向触底 synthetic delta 方案，不再依赖 `api.render(null)`。
+- 监听 `partialRenderFinished`，partial bitmap 完成后立即重试桥接；即使边界回弹已经结束、没有新的触摸事件，也能补发累计位移。
+- 进一步确认仅补发偏移仍不足：alphaTab 的 `_layoutDirty` 置位后，Android 遍历可能不会再次进入其 `onLayout`，上方占位块因此保持已回收状态。同步偏移前现对 render surface 执行同步 `forceLayout`/`measure`/`layout`，先让 alphaTab 清除脏布局并重新排入可见 partial，再补发累计偏移。
+- 代码审计移除了排查阶段的高频渲染日志；`requestLayout` 与 `partialRenderFinished` 回调现在只有在布局脏或存在未交付偏移时才会继续调度，避免无效主线程遍历。
+- 验证：`:app:testDebugUnitTest` 与 `:app:assembleDebug` 已通过，诊断日志确认上下边界占位块会随滚动方向正确切换，APK 已安装，待真机复测。

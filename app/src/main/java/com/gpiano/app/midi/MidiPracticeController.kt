@@ -36,6 +36,7 @@ data class MidiCaptureUiState(
 
 class MidiPracticeController(context: Context) : Closeable {
     var onStateChanged: (MidiCaptureUiState) -> Unit = {}
+    var onPerformedNotesChanged: (List<PerformedMidiNote>) -> Unit = {}
 
     private val manager: MidiManager? = context.applicationContext.getSystemService(MidiManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
@@ -47,10 +48,19 @@ class MidiPracticeController(context: Context) : Closeable {
     private var recordingOriginNanos: Long? = null
     private var device: MidiDevice? = null
     private var outputPort: MidiOutputPort? = null
+    @Volatile
     private var state = MidiCaptureUiState()
     private var closed = false
 
     fun currentState(): MidiCaptureUiState = state
+
+    fun recordingElapsedNanos(nowNanos: Long = System.nanoTime()): Long = synchronized(lock) {
+        recordingOriginNanos?.let { (nowNanos - it).coerceAtLeast(0L) } ?: 0L
+    }
+
+    fun performedNotesSnapshot(nowNanos: Long = System.nanoTime()): List<PerformedMidiNote> = synchronized(lock) {
+        performedNotesSnapshotLocked(nowNanos)
+    }
 
     private val receiver = object : MidiReceiver() {
         override fun onSend(data: ByteArray, offset: Int, count: Int, timestamp: Long) {
@@ -166,7 +176,7 @@ class MidiPracticeController(context: Context) : Closeable {
             completeNotes.clear()
             activeNotes.clear()
             nextSequence = 0
-            recordingOriginNanos = null
+            recordingOriginNanos = System.nanoTime()
         }
         publish(
             state.copy(
@@ -223,6 +233,7 @@ class MidiPracticeController(context: Context) : Closeable {
         closed = true
         manager?.unregisterDeviceCallback(deviceCallback)
         closeDevice()
+        onPerformedNotesChanged = {}
     }
 
     private fun handleMessage(message: MidiNoteMessage, timestampNanos: Long) {
@@ -243,7 +254,11 @@ class MidiPracticeController(context: Context) : Closeable {
                 }
             }
             val count = nextSequence
-            handler.post { publish(state.copy(capturedNoteCount = count)) }
+            val snapshot = performedNotesSnapshotLocked(timestampNanos)
+            handler.post {
+                publish(state.copy(capturedNoteCount = count))
+                onPerformedNotesChanged(snapshot)
+            }
         }
     }
 
@@ -254,6 +269,14 @@ class MidiPracticeController(context: Context) : Closeable {
             completeNotes += pending.complete((relativeNow - pending.onsetNanos).coerceAtLeast(0L))
         }
         activeNotes.clear()
+    }
+
+    private fun performedNotesSnapshotLocked(nowNanos: Long): List<PerformedMidiNote> {
+        val origin = recordingOriginNanos ?: nowNanos
+        val relativeNow = (nowNanos - origin).coerceAtLeast(0L)
+        return (completeNotes + activeNotes.values.flatten().map { pending ->
+            pending.complete((relativeNow - pending.onsetNanos).coerceAtLeast(0L))
+        }).sortedBy(PerformedMidiNote::sequence)
     }
 
     private fun closeDevice() {

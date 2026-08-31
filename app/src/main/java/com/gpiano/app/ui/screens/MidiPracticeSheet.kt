@@ -23,28 +23,22 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.gpiano.app.data.PracticeAttempt
 import com.gpiano.app.data.PracticeAttemptInputKind
 import com.gpiano.app.midi.MatchKind
 import com.gpiano.app.midi.MidiCaptureUiState
 import com.gpiano.app.midi.MidiConnectionState
-import com.gpiano.app.midi.MidiPracticeController
+import com.gpiano.app.midi.MidiPracticePhase
 import com.gpiano.app.midi.PerformanceMatch
 import com.gpiano.app.midi.PerformanceMatcher
 import com.gpiano.app.midi.PerformanceReport
-import com.gpiano.app.midi.PracticeAttemptRepository
 import com.gpiano.app.midi.StoredPracticeAttempt
+import com.gpiano.app.midi.WorkspaceMidiSession
+import com.gpiano.app.midi.WorkspaceMidiSessionState
 import com.gpiano.app.scoreworkspace.PlaybackPlan
 import java.text.DateFormat
 import java.util.Date
@@ -53,90 +47,36 @@ import kotlinx.coroutines.launch
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 fun MidiPracticeSheet(
-    structureId: String,
-    sourceRevisionId: String,
-    practiceVersionId: String?,
+    session: WorkspaceMidiSession,
+    sessionState: WorkspaceMidiSessionState,
     plan: PlaybackPlan,
     onListen: () -> Unit,
     onBeforeRecord: () -> Unit,
     onOpenCorrection: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current.applicationContext
-    val repository = remember { PracticeAttemptRepository(context) }
-    val controller = remember { MidiPracticeController(context) }
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var capture by remember { mutableStateOf(controller.currentState()) }
-    var startedAt by remember { mutableStateOf<Long?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var result by remember { mutableStateOf<StoredPracticeAttempt?>(null) }
-    var recent by remember { mutableStateOf<List<PracticeAttempt>>(emptyList()) }
+    val capture = sessionState.capture
 
-    controller.onStateChanged = { capture = it }
-    DisposableEffect(controller) {
-        onDispose { controller.close() }
-    }
-    LaunchedEffect(structureId) {
-        recent = runCatching { repository.recent(structureId) }.getOrDefault(emptyList())
+    LaunchedEffect(sessionState.target?.structureId) {
+        sessionState.target?.structureId?.let { session.loadRecent(it) }
     }
 
     fun startRecording() {
         onBeforeRecord()
-        error = null
-        result = null
         runCatching {
-            controller.startRecording()
-            startedAt = System.currentTimeMillis()
-        }.onFailure { error = it.message ?: "无法开始跟弹" }
+            session.startRecording()
+            onDismiss()
+        }.onFailure { session.reportError(it.message ?: "无法开始跟弹") }
     }
 
     fun finishRecording() {
-        val captureStartedAt = startedAt ?: return
-        val inputSnapshot = capture
-        runCatching { controller.stopRecording() }
-            .onSuccess { notes ->
-                busy = true
-                scope.launch {
-                    runCatching {
-                        val report = PerformanceMatcher.match(plan, notes)
-                        repository.save(
-                            structureId = structureId,
-                            sourceRevisionId = sourceRevisionId,
-                            practiceVersionId = practiceVersionId,
-                            plan = plan,
-                            inputKind = if (inputSnapshot.screenTest) {
-                                PracticeAttemptInputKind.ScreenTest
-                            } else {
-                                PracticeAttemptInputKind.Midi
-                            },
-                            deviceId = inputSnapshot.selectedDeviceId,
-                            deviceName = inputSnapshot.selectedDeviceName ?: "未知 MIDI 设备",
-                            startedAt = captureStartedAt,
-                            finishedAt = System.currentTimeMillis(),
-                            performed = notes,
-                            report = report,
-                        )
-                    }.onSuccess { saved ->
-                        result = saved
-                        recent = repository.recent(structureId)
-                        startedAt = null
-                    }.onFailure { error = it.message ?: "无法保存跟弹结果" }
-                    busy = false
-                }
-            }
-            .onFailure { error = it.message ?: "无法结束跟弹" }
+        scope.launch { session.finishRecording() }
     }
 
     ModalBottomSheet(
-        onDismissRequest = {
-            if (capture.connection == MidiConnectionState.Recording || capture.captureInterrupted) {
-                error = "请先完成或取消本次跟弹"
-            } else {
-                onDismiss()
-            }
-        },
+        onDismissRequest = onDismiss,
         sheetState = sheetState,
     ) {
         Column(
@@ -157,8 +97,7 @@ fun MidiPracticeSheet(
                 }
                 TextButton(
                     onClick = onDismiss,
-                    enabled = capture.connection != MidiConnectionState.Recording && !capture.captureInterrupted,
-                ) { Text("完成") }
+                ) { Text(if (sessionState.hasUnfinishedRecording) "收起" else "完成") }
             }
 
             Text(
@@ -169,54 +108,55 @@ fun MidiPracticeSheet(
             )
             OutlinedButton(
                 onClick = onListen,
-                enabled = capture.connection != MidiConnectionState.Recording && !capture.captureInterrupted,
+                enabled = !sessionState.hasUnfinishedRecording,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("先听目标片段") }
 
-            error?.let { message ->
+            sessionState.error?.let { message ->
                 Card(modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
                     Text(message, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp))
                 }
             }
 
-            if (result != null) {
+            if (sessionState.result != null) {
                 PerformanceResultContent(
-                    stored = requireNotNull(result),
-                    onTryAgain = { result = null },
+                    stored = requireNotNull(sessionState.result),
+                    onTryAgain = session::clearResult,
                     onOpenCorrection = onOpenCorrection,
                 )
+            } else if (sessionState.phase == MidiPracticePhase.CountIn) {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 14.dp))
+                Text(
+                    "一小节倒计时 · ${sessionState.countInBeat ?: 1}",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text("倒计时结束后开始按固定速度时间轴记录。", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = session::cancelRecording, modifier = Modifier.padding(top = 8.dp)) {
+                    Text("取消本次")
+                }
             } else {
                 CaptureContent(
                     capture = capture,
                     plan = plan,
-                    busy = busy,
-                    onRefresh = controller::refreshDevices,
-                    onConnect = controller::connect,
-                    onUseScreenTest = controller::useScreenTestInput,
+                    busy = sessionState.busy,
+                    onRefresh = session::refreshDevices,
+                    onConnect = session::connect,
+                    onUseScreenTest = session::useScreenTestInput,
                     onStart = ::startRecording,
-                    onScreenNote = controller::injectScreenNote,
+                    onScreenNote = session::injectScreenNote,
                     onFinish = ::finishRecording,
-                    onCancel = {
-                        controller.cancelRecording()
-                        startedAt = null
-                        error = null
-                    },
+                    onCancel = session::cancelRecording,
                 )
             }
 
-            if (recent.isNotEmpty()) {
+            if (sessionState.recent.isNotEmpty()) {
                 HorizontalDivider(modifier = Modifier.padding(top = 18.dp, bottom = 12.dp))
                 Text("最近跟弹", style = MaterialTheme.typography.titleMedium)
-                recent.take(5).forEach { attempt ->
+                sessionState.recent.take(5).forEach { attempt ->
                     TextButton(
                         onClick = {
-                            busy = true
-                            scope.launch {
-                                runCatching { repository.load(attempt.id) }
-                                    .onSuccess { result = it }
-                                    .onFailure { error = it.message ?: "无法读取跟弹记录" }
-                                busy = false
-                            }
+                            scope.launch { session.loadAttempt(attempt.id) }
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
@@ -457,7 +397,7 @@ private fun matchDescription(match: PerformanceMatch): String {
     }
 }
 
-private fun midiPitchLabel(pitch: Int): String {
+internal fun midiPitchLabel(pitch: Int): String {
     val names = arrayOf("C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B")
     return "${names[pitch % 12]}${pitch / 12 - 1}"
 }

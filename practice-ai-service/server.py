@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import os
+import socket
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,6 +33,8 @@ class Config:
     provider_token: str
     model: str
     timeout_seconds: int
+    socket_timeout_seconds: int = 15
+    http_workers: int = 16
 
     @property
     def model_ready(self) -> bool:
@@ -54,6 +59,8 @@ class Config:
             provider_token=os.environ.get("GPIANO_MODEL_API_KEY", "").strip(),
             model=os.environ.get("GPIANO_MODEL_NAME", "").strip(),
             timeout_seconds=max(5, int(os.environ.get("GPIANO_MODEL_TIMEOUT", "90"))),
+            socket_timeout_seconds=max(1, int(os.environ.get("GPIANO_AI_SOCKET_TIMEOUT", "15"))),
+            http_workers=max(1, int(os.environ.get("GPIANO_AI_HTTP_WORKERS", "16"))),
         )
 
 
@@ -66,13 +73,27 @@ class RequestProblem(Exception):
 
 def validate_provider_endpoint(value: str, allow_insecure_loopback: bool = False) -> None:
     parsed = urllib.parse.urlsplit(value)
-    loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    hostname = parsed.hostname
+    loopback = hostname in {"127.0.0.1", "localhost", "::1"}
     secure = parsed.scheme == "https"
     allowed_development_url = allow_insecure_loopback and loopback and parsed.scheme == "http"
-    if (not secure and not allowed_development_url) or not parsed.hostname or parsed.username or parsed.password:
+    if (not secure and not allowed_development_url) or not hostname or parsed.username or parsed.password:
         raise ValueError(
             "GPIANO_MODEL_ENDPOINT must use HTTPS; explicit development mode only permits HTTP loopback",
         )
+    if allowed_development_url:
+        return
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM)}
+    except socket.gaierror as error:
+        raise ValueError("GPIANO_MODEL_ENDPOINT host cannot be resolved") from error
+    if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
+        raise ValueError("GPIANO_MODEL_ENDPOINT must resolve only to public network addresses")
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        return None
 
 
 def validate_request(payload: Any) -> dict[str, Any]:
@@ -186,7 +207,7 @@ def normalize_model_response(content: str, request_payload: dict[str, Any]) -> d
 def provider_request(
     config: Config,
     payload: dict[str, Any],
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     if not config.model_ready:
         raise RequestProblem("model_not_configured", "生成式模型尚未配置", HTTPStatus.SERVICE_UNAVAILABLE)
@@ -218,8 +239,9 @@ def provider_request(
             "Accept": "application/json",
         },
     )
+    request_opener = opener or urllib.request.build_opener(NoRedirectHandler()).open
     try:
-        with opener(request, timeout=config.timeout_seconds) as response:
+        with request_opener(request, timeout=config.timeout_seconds) as response:
             raw = response.read(MAX_PROVIDER_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         raise RequestProblem("provider_unavailable", "模型服务暂时不可用", HTTPStatus.BAD_GATEWAY) from error
@@ -233,11 +255,40 @@ def provider_request(
     return normalize_model_response(content, payload)
 
 
-class PracticeAiServer(ThreadingHTTPServer):
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+
+    def configure_transport(self, socket_timeout_seconds: int, http_workers: int) -> None:
+        self.socket_timeout_seconds = socket_timeout_seconds
+        self._request_slots = threading.BoundedSemaphore(http_workers)
+
+    def get_request(self) -> tuple[socket.socket, Any]:
+        request, client_address = super().get_request()
+        request.settimeout(self.socket_timeout_seconds)
+        return request, client_address
+
+    def process_request(self, request: socket.socket, client_address: Any) -> None:
+        if not self._request_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request: socket.socket, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
+
+
+class PracticeAiServer(BoundedThreadingHTTPServer):
 
     def __init__(self, config: Config):
         self.config = config
+        self.configure_transport(config.socket_timeout_seconds, config.http_workers)
         super().__init__((config.host, config.port), PracticeAiHandler)
 
 

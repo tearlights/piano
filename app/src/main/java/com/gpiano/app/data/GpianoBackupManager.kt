@@ -54,6 +54,8 @@ class GpianoBackupManager(private val context: Context) {
             BackupFileMetadata(relativePath, file.length(), file.sha256())
         }
         val library = snapshot.toLibraryJson()
+        val libraryBytes = library.toString().toByteArray(Charsets.UTF_8)
+        requireBackupJsonSize("library.json", libraryBytes.size.toLong(), MAX_JSON_BYTES)
         val manifest = JSONObject()
             .put("formatVersion", CURRENT_FORMAT_VERSION)
             .put("createdAt", System.currentTimeMillis())
@@ -70,6 +72,8 @@ class GpianoBackupManager(private val context: Context) {
                     }
                 },
             )
+        val manifestBytes = manifest.toString().toByteArray(Charsets.UTF_8)
+        requireBackupJsonSize("manifest.json", manifestBytes.size.toLong(), MAX_JSON_BYTES)
 
         context.contentResolver.openOutputStream(destination)?.use { output ->
             ZipOutputStream(output.buffered()).use { zip ->
@@ -78,8 +82,8 @@ class GpianoBackupManager(private val context: Context) {
                     resolveInside(context.filesDir, item.path).inputStream().buffered().use { it.copyTo(zip) }
                     zip.closeEntry()
                 }
-                zip.writeJsonEntry("library.json", library)
-                zip.writeJsonEntry("manifest.json", manifest)
+                zip.writeBytesEntry("library.json", libraryBytes)
+                zip.writeBytesEntry("manifest.json", manifestBytes)
             }
         } ?: error("无法写入备份文件")
     }
@@ -324,7 +328,7 @@ class GpianoBackupManager(private val context: Context) {
         }
     }
 
-    private fun referencedPaths(snapshot: GpianoBackupSnapshot): Set<String> = linkedSetOf<String>().apply {
+    internal fun referencedPaths(snapshot: GpianoBackupSnapshot): Set<String> = linkedSetOf<String>().apply {
         snapshot.scores.map(Score::relativePath).filter(String::isNotBlank).forEach { add(safeDataPath(it)) }
         snapshot.pages.mapNotNull(ScorePage::relativePath).forEach { add(safeDataPath(it)) }
         snapshot.structures.mapNotNull(ScoreStructure::sourceMapRelativePath).forEach { add(safeDataPath(it)) }
@@ -542,7 +546,7 @@ class GpianoBackupManager(private val context: Context) {
 
     companion object {
         const val CURRENT_FORMAT_VERSION = 6
-        private const val MAX_JSON_BYTES = 10L * 1024 * 1024
+        internal const val MAX_JSON_BYTES = 64L * 1024 * 1024
         private const val MAX_ENTRY_BYTES = 256L * 1024 * 1024
         private const val MAX_TOTAL_BYTES = 1024L * 1024 * 1024
     }
@@ -556,7 +560,7 @@ private fun GpianoBackupSnapshot.toLibraryJson(): JSONObject = JSONObject()
     .put("folders", JSONArray().apply { folders.forEach { put(it.toJson()) } })
     .put("structures", JSONArray().apply { structures.forEach { put(it.toJson()) } })
     .put("revisions", JSONArray().apply { revisions.forEach { put(it.toJson()) } })
-    .put("recognitionJobs", JSONArray().apply { recognitionJobs.forEach { put(it.exportCopy().toJson()) } })
+    .put("recognitionJobs", JSONArray().apply { recognitionJobs.forEach { put(it.sanitizedForBackup().toJson()) } })
     .put("practiceVersions", JSONArray().apply { practiceVersions.forEach { put(it.toJson()) } })
     .put("practiceVersionRevisions", JSONArray().apply { practiceVersionRevisions.forEach { put(it.toJson()) } })
     .put("practiceAttempts", JSONArray().apply { practiceAttempts.forEach { put(it.toJson()) } })
@@ -624,7 +628,11 @@ private fun MidiPerformanceEvent.toJson() = JSONObject()
     .put("midiPitch", midiPitch).put("velocity", velocity).put("onsetNanos", onsetNanos)
     .putNullable("durationNanos", durationNanos)
 
-private fun RecognitionJob.exportCopy(): RecognitionJob = copy(remoteJobId = null)
+internal fun RecognitionJob.sanitizedForBackup(): RecognitionJob = copy(
+    remoteJobId = null,
+    errorMessage = null,
+    diagnosticsJson = null,
+)
 
 private fun RecognitionJob.restoredCopy(): RecognitionJob = when {
     status == RecognitionJobStatus.Ready && resultStructureId != null -> copy(remoteJobId = null)
@@ -648,10 +656,14 @@ private fun JSONObject.arrayOrEmpty(key: String): JSONArray = optJSONArray(key) 
 private inline fun <T> JSONArray.mapObjects(transform: (JSONObject) -> T): List<T> =
     List(length()) { index -> transform(getJSONObject(index)) }
 
-private fun ZipOutputStream.writeJsonEntry(name: String, value: JSONObject) {
+private fun ZipOutputStream.writeBytesEntry(name: String, value: ByteArray) {
     putNextEntry(ZipEntry(name))
-    write(value.toString().toByteArray(Charsets.UTF_8))
+    write(value)
     closeEntry()
+}
+
+internal fun requireBackupJsonSize(name: String, size: Long, limit: Long) {
+    require(size <= limit) { "$name 过大（${size}B，最大 ${limit}B）" }
 }
 
 private fun safeArchivePath(path: String): String {

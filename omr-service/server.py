@@ -28,6 +28,7 @@ from xml.etree import ElementTree
 
 MAX_INPUT_BYTES = 25 * 1024 * 1024
 MAX_MUSIC_XML_BYTES = 20 * 1024 * 1024
+MAX_MXL_CONTAINER_BYTES = 64 * 1024
 JOB_ID = re.compile(r"^[0-9a-f-]{36}$")
 SUPPORTED_TYPES = {
     "image/png": ".png",
@@ -45,6 +46,10 @@ class Config:
     audiveris_bin: str
     timeout_seconds: int
     workers: int
+    socket_timeout_seconds: int = 15
+    http_workers: int = 16
+    max_jobs: int = 500
+    job_ttl_seconds: int = 7 * 24 * 60 * 60
 
     @classmethod
     def from_environment(cls) -> "Config":
@@ -60,38 +65,82 @@ class Config:
             audiveris_bin=os.environ.get("AUDIVERIS_BIN", "audiveris"),
             timeout_seconds=int(os.environ.get("GPIANO_OMR_TIMEOUT", "900")),
             workers=max(1, int(os.environ.get("GPIANO_OMR_WORKERS", "1"))),
+            socket_timeout_seconds=max(1, int(os.environ.get("GPIANO_OMR_SOCKET_TIMEOUT", "15"))),
+            http_workers=max(1, int(os.environ.get("GPIANO_OMR_HTTP_WORKERS", "16"))),
+            max_jobs=max(1, int(os.environ.get("GPIANO_OMR_MAX_JOBS", "500"))),
+            job_ttl_seconds=max(60, int(os.environ.get("GPIANO_OMR_JOB_TTL", str(7 * 24 * 60 * 60)))),
         )
 
 
+class JobCapacityError(Exception):
+    pass
+
+
 class JobStore:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, max_jobs: int = 500, ttl_seconds: int = 7 * 24 * 60 * 60):
         self.root = root
+        self.max_jobs = max_jobs
+        self.ttl_seconds = ttl_seconds
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
 
     def create(self, mime_type: str, original_name: str, content: bytes) -> dict[str, Any]:
-        job_id = str(uuid.uuid4())
-        job_dir = self.job_dir(job_id)
-        job_dir.mkdir(mode=0o700)
-        extension = SUPPORTED_TYPES[mime_type]
-        input_name = f"input{extension}"
-        (job_dir / input_name).write_bytes(content)
-        now = int(time.time() * 1000)
-        job = {
-            "jobId": job_id,
-            "status": "queued",
-            "stage": "queued",
-            "inputName": input_name,
-            "originalName": safe_display_name(original_name),
-            "mimeType": mime_type,
-            "createdAt": now,
-            "updatedAt": now,
-            "errorCode": None,
-            "errorMessage": None,
-            "diagnostics": None,
-        }
-        self.save(job)
-        return job
+        with self._lock:
+            now = int(time.time() * 1000)
+            self._cleanup_locked(now)
+            if sum(1 for path in self.root.iterdir() if path.is_dir()) >= self.max_jobs:
+                raise JobCapacityError("OMR job capacity reached")
+            job_id = str(uuid.uuid4())
+            job_dir = self.job_dir(job_id)
+            job_dir.mkdir(mode=0o700)
+            try:
+                extension = SUPPORTED_TYPES[mime_type]
+                input_name = f"input{extension}"
+                (job_dir / input_name).write_bytes(content)
+                job = {
+                    "jobId": job_id,
+                    "status": "queued",
+                    "stage": "queued",
+                    "inputName": input_name,
+                    "originalName": safe_display_name(original_name),
+                    "mimeType": mime_type,
+                    "createdAt": now,
+                    "updatedAt": now,
+                    "errorCode": None,
+                    "errorMessage": None,
+                    "diagnostics": None,
+                }
+                self.save(job)
+                return job
+            except BaseException:
+                shutil.rmtree(job_dir, ignore_errors=True)
+                raise
+
+    def cleanup(self, now_ms: int | None = None) -> int:
+        with self._lock:
+            return self._cleanup_locked(now_ms if now_ms is not None else int(time.time() * 1000))
+
+    def _cleanup_locked(self, now_ms: int) -> int:
+        removed = 0
+        ttl_ms = self.ttl_seconds * 1000
+        for job_dir in self.root.iterdir():
+            if not job_dir.is_dir():
+                continue
+            job_path = job_dir / "job.json"
+            try:
+                job = json.loads(job_path.read_text(encoding="utf-8"))
+                status = job.get("status")
+                updated_at = int(job.get("updatedAt", 0))
+                expired = status in {"ready", "failed"} and now_ms - updated_at >= ttl_ms
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                try:
+                    expired = now_ms - int(job_dir.stat().st_mtime * 1000) >= ttl_ms
+                except OSError:
+                    expired = False
+            if expired:
+                shutil.rmtree(job_dir, ignore_errors=True)
+                removed += 1
+        return removed
 
     def load(self, job_id: str) -> dict[str, Any] | None:
         if not JOB_ID.fullmatch(job_id):
@@ -226,13 +275,43 @@ class RecognitionFailure(Exception):
         self.code = code
 
 
-class OmrServer(ThreadingHTTPServer):
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+
+    def configure_transport(self, socket_timeout_seconds: int, http_workers: int) -> None:
+        self.socket_timeout_seconds = socket_timeout_seconds
+        self._request_slots = threading.BoundedSemaphore(http_workers)
+
+    def get_request(self) -> tuple[Any, Any]:
+        request, client_address = super().get_request()
+        request.settimeout(self.socket_timeout_seconds)
+        return request, client_address
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._request_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
+
+
+class OmrServer(BoundedThreadingHTTPServer):
 
     def __init__(self, config: Config):
         self.config = config
-        self.store = JobStore(config.data_dir / "jobs")
+        self.store = JobStore(config.data_dir / "jobs", config.max_jobs, config.job_ttl_seconds)
+        self.store.cleanup()
         self.runner = AudiverisRunner(config, self.store)
+        self.configure_transport(config.socket_timeout_seconds, config.http_workers)
         super().__init__((config.host, config.port), OmrHandler)
         for job_id in self.store.resumable():
             self.runner.submit(job_id)
@@ -302,7 +381,15 @@ class OmrHandler(BaseHTTPRequestHandler):
             return
         encoded_name = self.headers.get("X-File-Name", "score")
         original_name = urllib.parse.unquote(encoded_name)
-        job = self.server.store.create(mime_type, original_name, content)
+        try:
+            job = self.server.store.create(mime_type, original_name, content)
+        except JobCapacityError:
+            self.send_error_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "job_capacity_reached",
+                "识别任务已满，请等待现有任务完成或稍后重试",
+            )
+            return
         self.server.runner.submit(job["jobId"])
         self.send_json(HTTPStatus.ACCEPTED, public_job(job))
 
@@ -376,7 +463,10 @@ def find_music_xml(output_dir: Path) -> bytes:
 
 def extract_mxl(path: Path) -> bytes:
     with zipfile.ZipFile(path) as archive:
-        container = ElementTree.fromstring(archive.read("META-INF/container.xml"))
+        container_info = archive.getinfo("META-INF/container.xml")
+        if container_info.file_size > MAX_MXL_CONTAINER_BYTES:
+            raise ValueError("MXL container.xml is too large")
+        container = ElementTree.fromstring(archive.read(container_info))
         root_file = next(
             (node.attrib.get("full-path") for node in container.iter() if node.tag.rsplit("}", 1)[-1] == "rootfile"),
             None,

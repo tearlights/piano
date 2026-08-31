@@ -29,4 +29,5 @@ abstract class GpianoDatabase : RoomDatabase() {
     abstract fun recognitionJobDao(): RecognitionJobDao
     abstract fun practiceVersionDao(): PracticeVersionDao
     abstract fun practiceAttemptDao(): PracticeAttemptDao
+    abstract fun backupRestoreDao(): BackupRestoreDao
 }

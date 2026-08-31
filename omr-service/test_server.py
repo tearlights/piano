@@ -2,15 +2,46 @@ import json
 import tempfile
 import unittest
 import zipfile
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import Mock, patch
 
-from server import JobStore, extract_mxl, find_music_xml, safe_display_name, tokens_equal
+from server import (
+    BoundedThreadingHTTPServer,
+    JobCapacityError,
+    JobStore,
+    extract_mxl,
+    find_music_xml,
+    safe_display_name,
+    tokens_equal,
+)
 
 
 MUSIC_XML = b'<?xml version="1.0"?><score-partwise version="4.0"><part-list/></score-partwise>'
 
 
 class OmrServiceTest(unittest.TestCase):
+    def test_http_transport_sets_socket_timeout(self):
+        server = object.__new__(BoundedThreadingHTTPServer)
+        server.configure_transport(socket_timeout_seconds=9, http_workers=1)
+        request = Mock()
+        with patch.object(ThreadingHTTPServer, "get_request", return_value=(request, ("127.0.0.1", 1))):
+            accepted, _ = server.get_request()
+        self.assertIs(request, accepted)
+        request.settimeout.assert_called_once_with(9)
+
+    def test_http_transport_rejects_work_beyond_bound(self):
+        server = object.__new__(BoundedThreadingHTTPServer)
+        server.configure_transport(socket_timeout_seconds=9, http_workers=1)
+        server.shutdown_request = Mock()
+        first = Mock()
+        second = Mock()
+        with patch.object(ThreadingHTTPServer, "process_request") as dispatch:
+            server.process_request(first, ("127.0.0.1", 1))
+            server.process_request(second, ("127.0.0.1", 2))
+        dispatch.assert_called_once_with(first, ("127.0.0.1", 1))
+        server.shutdown_request.assert_called_once_with(second)
+
     def test_job_store_survives_reload(self):
         with tempfile.TemporaryDirectory() as directory:
             store = JobStore(Path(directory))
@@ -18,6 +49,35 @@ class OmrServiceTest(unittest.TestCase):
             updated = store.transition(created["jobId"], status="running", stage="audiveris")
             self.assertEqual("score.png", updated["originalName"])
             self.assertEqual("running", JobStore(Path(directory)).load(created["jobId"])["status"])
+
+    def test_job_store_enforces_capacity_for_active_jobs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = JobStore(Path(directory), max_jobs=1, ttl_seconds=60)
+            store.create("image/png", "first.png", b"png")
+            with self.assertRaises(JobCapacityError):
+                store.create("image/png", "second.png", b"png")
+
+    def test_cleanup_removes_expired_terminal_jobs_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = JobStore(Path(directory), max_jobs=10, ttl_seconds=60)
+            ready = store.create("image/png", "ready.png", b"png")
+            running = store.create("image/png", "running.png", b"png")
+            ready = store.transition(ready["jobId"], status="ready", stage="ready")
+            running = store.transition(running["jobId"], status="running", stage="audiveris")
+            removed = store.cleanup(now_ms=max(ready["updatedAt"], running["updatedAt"]) + 60_000)
+            self.assertEqual(1, removed)
+            self.assertIsNone(store.load(ready["jobId"]))
+            self.assertEqual("running", store.load(running["jobId"])["status"])
+
+    def test_cleanup_removes_expired_incomplete_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JobStore(root, max_jobs=10, ttl_seconds=60)
+            incomplete = root / "incomplete"
+            incomplete.mkdir()
+            now_ms = int(incomplete.stat().st_mtime * 1000) + 60_000
+            self.assertEqual(1, store.cleanup(now_ms=now_ms))
+            self.assertFalse(incomplete.exists())
 
     def test_extracts_declared_musicxml_from_mxl(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -41,6 +101,15 @@ class OmrServiceTest(unittest.TestCase):
                 )
                 archive.writestr("../score.xml", MUSIC_XML)
             with self.assertRaises(ValueError):
+                extract_mxl(archive_path)
+
+    def test_rejects_oversized_mxl_container_before_decompression(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "oversized-container.mxl"
+            with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("META-INF/container.xml", b" " * (64 * 1024 + 1))
+                archive.writestr("score.xml", MUSIC_XML)
+            with self.assertRaisesRegex(ValueError, "container.xml is too large"):
                 extract_mxl(archive_path)
 
     def test_filename_is_not_a_path_or_header(self):

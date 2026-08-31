@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
@@ -29,4 +30,9 @@ interface BookmarkDao {
 
     @Query("SELECT EXISTS(SELECT 1 FROM bookmarks WHERE scoreId = :scoreId AND page = :page)")
     suspend fun exists(scoreId: String, page: Int): Boolean
+
+    @Transaction
+    suspend fun toggle(scoreId: String, page: Int, createdAt: Long) {
+        if (exists(scoreId, page)) delete(scoreId, page) else insert(Bookmark(scoreId, page, createdAt))
+    }
 }

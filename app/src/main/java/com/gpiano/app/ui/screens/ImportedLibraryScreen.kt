@@ -23,6 +23,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -49,6 +50,7 @@ fun ImportedLibraryScreen(
     contentPadding: PaddingValues,
     scores: List<Score>,
     importError: String?,
+    importInProgress: Boolean,
     onImport: (Uri) -> Unit,
     onImportAll: (List<Uri>) -> Unit,
     onRename: (Score, String) -> Unit,
@@ -70,10 +72,14 @@ fun ImportedLibraryScreen(
     Column(Modifier.fillMaxSize().padding(contentPadding).padding(horizontal = 16.dp)) {
         Row(Modifier.fillMaxWidth().padding(top = 20.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Gpiano", modifier = Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-            Button(onClick = { importChoiceVisible = true }) {
-                Icon(Icons.Outlined.Add, null)
+            Button(onClick = { importChoiceVisible = true }, enabled = !importInProgress) {
+                if (importInProgress) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Outlined.Add, null)
+                }
                 Spacer(Modifier.width(4.dp))
-                Text("导入")
+                Text(if (importInProgress) "正在导入…" else "导入")
             }
         }
         if (importChoiceVisible) {
@@ -87,6 +93,9 @@ fun ImportedLibraryScreen(
         }
         OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), label = { Text("搜索曲名") }, singleLine = true)
         importError?.let { Text(it, modifier = Modifier.padding(top = 12.dp), color = MaterialTheme.colorScheme.error) }
+        if (importInProgress) {
+            Text("正在复制并校验曲谱，请勿重复选择文件。", modifier = Modifier.padding(top = 12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         if (filteredScores.isEmpty()) {
             Spacer(Modifier.height(56.dp))
             Text("还没有琴谱", style = MaterialTheme.typography.titleMedium)
